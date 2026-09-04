@@ -1,5 +1,6 @@
 package org.mayabanque.wero.mock;
 
+import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
@@ -8,7 +9,9 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
 @Consumes(MediaType.APPLICATION_JSON)
 @Produces(MediaType.APPLICATION_JSON)
 public class WeroMockResource {
-    @RestClient SctInstClient sctInst;
+    @Inject
+    @RestClient
+    SctInstClient sctInst;
 
     @POST
     public PaymentResponse pay(PaymentRequest request) {
