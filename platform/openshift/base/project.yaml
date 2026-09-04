@@ -1,0 +1,7 @@
+apiVersion: project.openshift.io/v1
+kind: Project
+metadata:
+  name: wero-poc
+  labels:
+    app.kubernetes.io/part-of: wero-organisme-poc
+    bank.simulation/name: mayabanque
