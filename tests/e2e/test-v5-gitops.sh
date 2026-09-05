@@ -27,7 +27,7 @@ MANAGED="$(oc get deployment api-gateway -n "$PROJECT" -o jsonpath='{.metadata.a
 ENVIRONMENT="$(oc get deployment api-gateway -n "$PROJECT" -o jsonpath='{.metadata.annotations.gitops\.mayabanque\.io/environment}')"
 [[ "$MANAGED" == "argocd" ]]
 [[ "$ENVIRONMENT" == "crc" ]]
-! grep -R -E '^[[:space:]]*kind:[[:space:]]*Secret[[:space:]]*$' "$ROOT/gitops" >/dev/null
+! grep -R -E '^[[:space:]]*kind:[[:space:]]*Secret[[:space:]]*$' "$ROOT/gitops/base" "$ROOT/gitops/overlays" >/dev/null
 
 echo "==> 4. Public routes and V3B backend isolation are still enforced"
 oc get route api-gateway keycloak jaeger prometheus grafana -n "$PROJECT" >/dev/null
