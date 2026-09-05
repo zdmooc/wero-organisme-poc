@@ -22,6 +22,8 @@ spec:
             - start-dev
             - --import-realm
           env:
+            - name: HOME
+              value: /tmp
             - name: KC_BOOTSTRAP_ADMIN_USERNAME
               valueFrom:
                 secretKeyRef:
