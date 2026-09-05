@@ -30,7 +30,12 @@
   "users": [
     {
       "username": "alice",
+      "firstName": "Alice",
+      "lastName": "MayaBanque",
+      "email": "alice@mayabanque.example",
+      "emailVerified": true,
       "enabled": true,
+      "requiredActions": [],
       "realmRoles": [
         "payment-create",
         "payment-read",
@@ -42,7 +47,12 @@
     },
     {
       "username": "auditor",
+      "firstName": "Audit",
+      "lastName": "MayaBanque",
+      "email": "auditor@mayabanque.example",
+      "emailVerified": true,
       "enabled": true,
+      "requiredActions": [],
       "realmRoles": ["payment-read", "audit-read"]
     }
   ]
