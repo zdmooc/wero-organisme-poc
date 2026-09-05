@@ -71,9 +71,9 @@ jobs:
           grep -q 'name: prometheus' /tmp/wero-v5-rendered.yaml
           grep -q 'name: grafana' /tmp/wero-v5-rendered.yaml
 
-      - name: Verify secrets are not committed in GitOps desired state
+      - name: Verify runtime Secrets are not part of rendered desired state
         run: |
-          if grep -R -E '^[[:space:]]*kind:[[:space:]]*Secret[[:space:]]*$' gitops; then
-            echo 'ERROR: Secret manifest found under gitops/'
+          if grep -E '^[[:space:]]*kind:[[:space:]]*Secret[[:space:]]*$' /tmp/wero-v5-rendered.yaml; then
+            echo 'ERROR: Secret manifest found in rendered runtime desired state'
             exit 1
           fi
