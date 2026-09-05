@@ -20,6 +20,40 @@ spec:
       jsonPointers:
         - /spec/volumeName
         - /spec/storageClassName
+    # CRC keeps the OpenShift internal ImageStream build plane. OpenShift resolves
+    # :latest into immutable registry digests on the live Deployments. Argo CD owns
+    # the rest of the Deployment desired state, while the image field is deliberately
+    # ignored in this local lab. Production promotion will pin immutable digests in Git.
+    - group: apps
+      kind: Deployment
+      name: api-gateway
+      jqPathExpressions:
+        - '.spec.template.spec.containers[] | select(.name == "api-gateway").image'
+    - group: apps
+      kind: Deployment
+      name: payment-service
+      jqPathExpressions:
+        - '.spec.template.spec.containers[] | select(.name == "payment-service").image'
+    - group: apps
+      kind: Deployment
+      name: consumer-psp
+      jqPathExpressions:
+        - '.spec.template.spec.containers[] | select(.name == "consumer-psp").image'
+    - group: apps
+      kind: Deployment
+      name: event-audit-service
+      jqPathExpressions:
+        - '.spec.template.spec.containers[] | select(.name == "event-audit-service").image'
+    - group: apps
+      kind: Deployment
+      name: mock-wero
+      jqPathExpressions:
+        - '.spec.template.spec.containers[] | select(.name == "mock-wero").image'
+    - group: apps
+      kind: Deployment
+      name: mock-sct-inst
+      jqPathExpressions:
+        - '.spec.template.spec.containers[] | select(.name == "mock-sct-inst").image'
   syncPolicy:
     automated:
       prune: true
