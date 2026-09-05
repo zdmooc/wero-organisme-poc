@@ -15,3 +15,12 @@ spec:
       kind: '*'
   orphanedResources:
     warn: true
+    ignore:
+      - group: ''
+        kind: Secret
+      - group: build.openshift.io
+        kind: BuildConfig
+      - group: build.openshift.io
+        kind: Build
+      - group: image.openshift.io
+        kind: ImageStream
