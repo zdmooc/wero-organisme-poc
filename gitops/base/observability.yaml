@@ -207,14 +207,14 @@ kind: ConfigMap
 metadata:
   name: grafana-wero-dashboard
 data:
-  wero-v5.json: |
+  wero-v4.json: |
     {
-      "uid": "wero-v5",
+      "uid": "wero-v4",
       "title": "MayaBanque Wero — V5 GitOps Observability",
-      "tags": ["wero", "poc", "v5", "gitops"],
+      "tags": ["wero", "poc", "v4-regression", "v5", "gitops"],
       "timezone": "browser",
       "schemaVersion": 39,
-      "version": 1,
+      "version": 2,
       "refresh": "5s",
       "time": {"from": "now-30m", "to": "now"},
       "panels": [
