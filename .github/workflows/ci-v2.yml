@@ -1,4 +1,4 @@
-name: V2/V2B/V3/V3B/V4 compile checks
+name: V2/V2B/V3/V3B/V4/V5 checks
 
 on:
   push:
@@ -8,6 +8,7 @@ on:
       - v3-security-consent-sca
       - v3b-api-gateway-zero-trust
       - v4-observability-e2e
+      - v5-gitops-argocd
   pull_request:
     branches:
       - v1-single-immediate
@@ -15,6 +16,8 @@ on:
       - v2b-kafka-outbox-events
       - v3-security-consent-sca
       - v3b-api-gateway-zero-trust
+      - v4-observability-e2e
+      - v5-gitops-argocd
 
 jobs:
   compile:
@@ -43,3 +46,34 @@ jobs:
       - name: Compile ${{ matrix.module }}
         working-directory: ${{ matrix.module }}
         run: mvn -B clean package -DskipTests
+
+  gitops-render:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pinned Kustomize 5.8.1
+        run: |
+          curl -fsSL -o /tmp/kustomize.tgz \
+            https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.8.1/kustomize_v5.8.1_linux_amd64.tar.gz
+          echo "029a7f0f4e1932c52a0476cf02a0fd855c0bb85694b82c338fc648dcb53a819d  /tmp/kustomize.tgz" | sha256sum -c -
+          tar -xzf /tmp/kustomize.tgz -C /tmp
+          /tmp/kustomize version
+
+      - name: Render CRC desired state
+        run: |
+          /tmp/kustomize build gitops/overlays/crc > /tmp/wero-v5-rendered.yaml
+          grep -q 'name: api-gateway' /tmp/wero-v5-rendered.yaml
+          grep -q 'name: payment-service' /tmp/wero-v5-rendered.yaml
+          grep -q 'name: keycloak' /tmp/wero-v5-rendered.yaml
+          grep -q 'name: jaeger' /tmp/wero-v5-rendered.yaml
+          grep -q 'name: prometheus' /tmp/wero-v5-rendered.yaml
+          grep -q 'name: grafana' /tmp/wero-v5-rendered.yaml
+
+      - name: Verify secrets are not committed in GitOps desired state
+        run: |
+          if grep -R -E '^[[:space:]]*kind:[[:space:]]*Secret[[:space:]]*$' gitops; then
+            echo 'ERROR: Secret manifest found under gitops/'
+            exit 1
+          fi
