@@ -11,7 +11,6 @@ import jakarta.ws.rs.core.Response;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
 import org.jboss.logging.Logger;
 
 @Path("/payments")
@@ -21,8 +20,7 @@ public class PaymentResource {
 
     private static final Logger LOG = Logger.getLogger(PaymentResource.class);
 
-    @Inject @RestClient ConsumerPspClient consumerPsp;
-    @Inject @RestClient SctInstStatusClient sctInstStatus;
+    @Inject PaymentRemoteGateway remoteGateway;
     @Inject OutboxService outbox;
     @Inject SecurityIdentity identity;
     @Inject PaymentMetrics metrics;
@@ -100,7 +98,8 @@ public class PaymentResource {
             payment.updatedAt = Instant.now();
             outbox.enqueue(payment, "PAYMENT_PROCESSING", correlationId);
 
-            PaymentResponse downstream = consumerPsp.pay(correlationId, request);
+            // The outbound HTTP call is executed with JTA suspended by PaymentRemoteGateway.
+            PaymentResponse downstream = remoteGateway.pay(correlationId, request);
             payment.settlementId = downstream.settlementId();
             payment.lastError = null;
             payment.status = switch (downstream.status()) {
@@ -171,7 +170,8 @@ public class PaymentResource {
         PaymentStatus before = payment.status;
         SctInstStatusClient.RailStatus rail;
         try {
-            rail = sctInstStatus.get(correlationId, paymentId);
+            // Reconciliation performs another remote call, so suspend JTA here too.
+            rail = remoteGateway.railStatus(correlationId, paymentId);
         } catch (Exception e) {
             metrics.reconciliation("UNAVAILABLE");
             return Response.status(202)
