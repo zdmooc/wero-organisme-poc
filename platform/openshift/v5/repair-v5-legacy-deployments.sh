@@ -21,6 +21,23 @@ oc get application "$APP_NAME" -n "$GITOPS_NS" >/dev/null 2>&1 || {
   exit 1
 }
 
+service_backend_addresses() {
+  local service_name="$1"
+  local addresses=""
+
+  addresses="$(oc get endpointslices.discovery.k8s.io -n "$PROJECT" \
+    -l "kubernetes.io/service-name=${service_name}" \
+    -o jsonpath='{range .items[*].endpoints[*]}{range .addresses[*]}{.}{" "}{end}{end}' \
+    2>/dev/null || true)"
+
+  if [[ -z "${addresses// /}" ]]; then
+    addresses="$(oc get endpoints "$service_name" -n "$PROJECT" \
+      -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null || true)"
+  fi
+
+  printf '%s' "$addresses"
+}
+
 echo "==> Inspecting legacy V3/V4 Deployment selectors"
 RECREATED=0
 for d in "${DEPLOYMENTS[@]}"; do
@@ -102,9 +119,9 @@ for d in "${DEPLOYMENTS[@]}"; do
   }
 
   ENDPOINT_READY=false
+  ENDPOINT_IPS=""
   for _ in $(seq 1 36); do
-    ENDPOINT_IPS="$(oc get endpointslice -n "$PROJECT" -l "kubernetes.io/service-name=$d" \
-      -o jsonpath='{range .items[*].endpoints[*]}{range .addresses[*]}{.}{" "}{end}{end}' 2>/dev/null || true)"
+    ENDPOINT_IPS="$(service_backend_addresses "$d")"
     if [[ -n "${ENDPOINT_IPS// /}" ]]; then
       ENDPOINT_READY=true
       break
@@ -112,7 +129,7 @@ for d in "${DEPLOYMENTS[@]}"; do
     sleep 5
   done
   [[ "$ENDPOINT_READY" == "true" ]] || {
-    echo "ERROR: Service $d has no ready EndpointSlice address"
+    echo "ERROR: Service $d has no backend address"
     exit 1
   }
 done
@@ -138,4 +155,4 @@ if [[ "$SYNCED" != "true" ]]; then
   exit 1
 fi
 
-echo "V5 migration repair OK: $RECREATED legacy Deployment(s) recreated, $SERVICES_FIXED Service selector(s) repaired; Argo CD is Synced/Healthy and all Java Services have endpoints."
+echo "V5 migration repair OK: $RECREATED legacy Deployment(s) recreated, $SERVICES_FIXED Service selector(s) repaired; Argo CD is Synced/Healthy and all Java Services have backend addresses."
