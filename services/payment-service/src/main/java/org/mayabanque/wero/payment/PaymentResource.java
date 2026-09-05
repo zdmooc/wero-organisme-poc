@@ -29,6 +29,9 @@ public class PaymentResource {
     @RestClient
     SctInstStatusClient sctInstStatus;
 
+    @Inject
+    OutboxService outbox;
+
     @POST
     @Path("/single-immediate")
     @Transactional
@@ -76,10 +79,12 @@ public class PaymentResource {
         payment.createdAt = now;
         payment.updatedAt = now;
         payment.persistAndFlush();
+        outbox.enqueue(payment, "PAYMENT_CREATED");
 
         try {
             payment.status = PaymentStatus.PROCESSING;
             payment.updatedAt = Instant.now();
+            outbox.enqueue(payment, "PAYMENT_PROCESSING");
 
             PaymentResponse downstream = consumerPsp.pay(request);
             payment.settlementId = downstream.settlementId();
@@ -91,15 +96,22 @@ public class PaymentResource {
             };
             payment.updatedAt = Instant.now();
 
-            if (payment.status == PaymentStatus.SETTLED) {
-                recordSettlementLedger(payment);
+            switch (payment.status) {
+                case SETTLED -> {
+                    recordSettlementLedger(payment);
+                    outbox.enqueue(payment, "PAYMENT_SETTLED");
+                }
+                case FAILED -> outbox.enqueue(payment, "PAYMENT_FAILED");
+                case PENDING -> outbox.enqueue(payment, "PAYMENT_PENDING");
+                default -> { }
             }
         } catch (Exception e) {
-            // Important payment rule: a timeout after submission is UNKNOWN, not FAILED.
-            // We must query status/reconcile before considering any replay.
+            // A timeout after submission is UNKNOWN, never an automatic FAILED.
+            // The outbox event and the payment state commit atomically in PostgreSQL.
             payment.status = PaymentStatus.UNKNOWN;
             payment.lastError = truncate(e.getClass().getSimpleName() + ": " + String.valueOf(e.getMessage()), 500);
             payment.updatedAt = Instant.now();
+            outbox.enqueue(payment, "PAYMENT_UNKNOWN");
         }
 
         int httpStatus = payment.status == PaymentStatus.UNKNOWN || payment.status == PaymentStatus.PENDING ? 202 : 200;
@@ -163,6 +175,18 @@ public class PaymentResource {
             payment.lastError = null;
             payment.updatedAt = Instant.now();
             recordSettlementLedger(payment);
+            if (before != PaymentStatus.SETTLED) {
+                outbox.enqueue(payment, "PAYMENT_RECONCILED");
+                outbox.enqueue(payment, "PAYMENT_SETTLED");
+            }
+        } else if ("FAILED".equals(rail.status())) {
+            payment.status = PaymentStatus.FAILED;
+            payment.lastError = null;
+            payment.updatedAt = Instant.now();
+            if (before != PaymentStatus.FAILED) {
+                outbox.enqueue(payment, "PAYMENT_RECONCILED");
+                outbox.enqueue(payment, "PAYMENT_FAILED");
+            }
         }
 
         return Response.ok(new ReconciliationResponse(
