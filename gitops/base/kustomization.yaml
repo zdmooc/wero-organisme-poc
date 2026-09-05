@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - infrastructure.yaml
+  - runtime.yaml
+  - observability.yaml
+  - networking-routes.yaml
+
+configMapGenerator:
+  - name: keycloak-realm
+    files:
+      - mayabanque-realm.json

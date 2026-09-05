@@ -9,14 +9,12 @@ import io.opentelemetry.api.trace.TraceFlags;
 import io.opentelemetry.api.trace.TraceState;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
-import io.quarkus.panache.common.Page;
 import io.quarkus.scheduler.Scheduled;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.transaction.Transactional;
+import jakarta.inject.Inject;
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
 import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
@@ -35,6 +33,8 @@ public class OutboxPublisher {
     @ConfigProperty(name = "kafka.bootstrap.servers") String bootstrapServers;
     @ConfigProperty(name = "wero.events.topic", defaultValue = "payment-events") String topic;
     @ConfigProperty(name = "wero.outbox.batch-size", defaultValue = "50") int batchSize;
+
+    @Inject OutboxStore store;
 
     KafkaProducer<String, String> producer;
 
@@ -56,15 +56,13 @@ public class OutboxPublisher {
     }
 
     @Scheduled(every = "1s", concurrentExecution = Scheduled.ConcurrentExecution.SKIP)
-    @Transactional
     void publishBatch() {
-        List<OutboxEventEntity> pending = OutboxEventEntity
-                .find("publishedAt is null order by id")
-                .page(Page.ofSize(batchSize))
-                .list();
+        // Never hold a JTA/Hibernate transaction while waiting on Kafka network I/O.
+        // DB reads and acknowledgements are committed in short transactions by OutboxStore.
+        List<OutboxStore.PendingEvent> pending = store.loadPending(batchSize);
 
-        for (OutboxEventEntity row : pending) {
-            Context parent = parentContext(row.traceparent);
+        for (OutboxStore.PendingEvent row : pending) {
+            Context parent = parentContext(row.traceparent());
             Span span = GlobalOpenTelemetry.getTracer("mayabanque-outbox")
                     .spanBuilder("payment-events publish")
                     .setSpanKind(SpanKind.PRODUCER)
@@ -72,28 +70,31 @@ public class OutboxPublisher {
                     .startSpan();
             span.setAttribute("messaging.system", "kafka");
             span.setAttribute("messaging.destination.name", topic);
-            span.setAttribute("wero.payment_id", row.aggregateId);
-            span.setAttribute("wero.event_id", row.eventId);
-            if (row.correlationId != null) span.setAttribute("wero.correlation_id", row.correlationId);
+            span.setAttribute("wero.payment_id", row.aggregateId());
+            span.setAttribute("wero.event_id", row.eventId());
+            if (row.correlationId() != null) span.setAttribute("wero.correlation_id", row.correlationId());
 
             try (Scope ignored = span.makeCurrent()) {
-                ProducerRecord<String, String> record = new ProducerRecord<>(topic, row.aggregateId, row.payload);
+                ProducerRecord<String, String> record = new ProducerRecord<>(topic, row.aggregateId(), row.payload());
                 String outgoingTraceparent = traceparent(span.getSpanContext());
                 if (outgoingTraceparent != null) {
                     record.headers().add("traceparent", outgoingTraceparent.getBytes(StandardCharsets.UTF_8));
                 }
-                if (row.correlationId != null) {
-                    record.headers().add("X-Correlation-Id", row.correlationId.getBytes(StandardCharsets.UTF_8));
+                if (row.correlationId() != null) {
+                    record.headers().add("X-Correlation-Id", row.correlationId().getBytes(StandardCharsets.UTF_8));
                 }
+
                 producer.send(record).get(3, TimeUnit.SECONDS);
-                row.publishedAt = Instant.now();
-                row.publishAttempts++;
-                row.lastError = null;
+                store.markPublished(row.id());
                 LOG.infof("correlationId=%s paymentId=%s eventId=%s Kafka published",
-                        row.correlationId, row.aggregateId, row.eventId);
+                        row.correlationId(), row.aggregateId(), row.eventId());
             } catch (Exception e) {
-                row.publishAttempts++;
-                row.lastError = truncate(e.getClass().getSimpleName() + ": " + String.valueOf(e.getMessage()), 500);
+                String error = truncate(e.getClass().getSimpleName() + ": " + String.valueOf(e.getMessage()), 500);
+                try {
+                    store.markFailed(row.id(), error);
+                } catch (Exception dbError) {
+                    LOG.errorf(dbError, "Unable to persist outbox failure for eventId=%s", row.eventId());
+                }
                 span.recordException(e);
                 span.setStatus(StatusCode.ERROR, "Kafka publish failed");
             } finally {

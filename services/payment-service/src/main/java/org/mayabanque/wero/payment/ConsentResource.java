@@ -1,5 +1,6 @@
 package org.mayabanque.wero.payment;
 
+import io.quarkus.narayana.jta.QuarkusTransaction;
 import io.quarkus.security.identity.SecurityIdentity;
 import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
@@ -84,8 +85,13 @@ public class ConsentResource {
     @POST
     @Path("/{consentId}/sca")
     @RolesAllowed("consent-sca")
-    @Transactional
     public Response verifySca(@PathParam("consentId") String consentId, ScaRequest request) {
+        // Keep the REST/security interceptor chain outside JTA. The complete SCA
+        // read/update/commit happens synchronously inside one explicit transaction.
+        return QuarkusTransaction.requiringNew().call(() -> verifyScaTx(consentId, request));
+    }
+
+    private Response verifyScaTx(String consentId, ScaRequest request) {
         ConsentEntity consent = ConsentEntity.findById(consentId);
         if (consent == null) {
             return Response.status(Response.Status.NOT_FOUND)
