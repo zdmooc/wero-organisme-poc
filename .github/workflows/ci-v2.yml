@@ -1,14 +1,16 @@
-name: V2/V2B compile checks
+name: V2/V2B/V3 compile checks
 
 on:
   push:
     branches:
       - v2-state-ledger-reconciliation
       - v2b-kafka-outbox-events
+      - v3-security-consent-sca
   pull_request:
     branches:
       - v1-single-immediate
       - v2-state-ledger-reconciliation
+      - v2b-kafka-outbox-events
 
 jobs:
   compile:
