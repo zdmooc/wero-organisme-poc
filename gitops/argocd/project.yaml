@@ -1,0 +1,17 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: wero-poc
+  namespace: openshift-gitops
+spec:
+  description: MayaBanque Wero POC GitOps project
+  sourceRepos:
+    - https://github.com/zdmooc/wero-organisme-poc.git
+  destinations:
+    - namespace: wero-poc
+      server: https://kubernetes.default.svc
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'
+  orphanedResources:
+    warn: true
