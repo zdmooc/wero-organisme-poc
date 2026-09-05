@@ -54,13 +54,26 @@ KC_ADMIN_USER="$(oc get secret keycloak-admin -o jsonpath='{.data.username}' | b
 KC_ADMIN_PASSWORD="$(oc get secret keycloak-admin -o jsonpath='{.data.password}' | base64 -d)"
 ALICE_PASSWORD="$(oc get secret wero-v3-demo-users -o jsonpath='{.data.ALICE_PASSWORD}' | base64 -d)"
 AUDITOR_PASSWORD="$(oc get secret wero-v3-demo-users -o jsonpath='{.data.AUDITOR_PASSWORD}' | base64 -d)"
-KEYCLOAK_POD="$(oc get pods -l app=keycloak -o jsonpath='{.items[0].metadata.name}')"
+
+# Always target the newest Running Keycloak pod. On CRC, kcadm connecting to
+# localhost:8080 from oc exec can fail even after the readiness probe succeeds.
+# The pod IP is the endpoint that Kubernetes probes and avoids service hairpin
+# and localhost binding differences.
+KEYCLOAK_POD="$(oc get pods -l app=keycloak --field-selector=status.phase=Running --sort-by=.metadata.creationTimestamp -o name | tail -1 | cut -d/ -f2)"
+if [[ -z "${KEYCLOAK_POD:-}" ]]; then
+  echo "ERROR: no Running Keycloak pod found"
+  oc get pods -l app=keycloak -o wide
+  exit 1
+fi
+KEYCLOAK_POD_IP="$(oc get pod "$KEYCLOAK_POD" -o jsonpath='{.status.podIP}')"
+KCADM_SERVER="http://${KEYCLOAK_POD_IP}:8080"
+echo "==> Configuring Keycloak identities via $KEYCLOAK_POD ($KEYCLOAK_POD_IP)"
 
 # Git Bash/MSYS rewrites Linux container paths such as /opt/keycloak/... into
 # C:/Program Files/Git/opt/keycloak/... before invoking oc.exe. Disable that
 # conversion only for oc exec so local Windows paths used elsewhere still work.
 MSYS_NO_PATHCONV=1 oc exec "$KEYCLOAK_POD" -- /opt/keycloak/bin/kcadm.sh config credentials \
-  --server http://localhost:8080 --realm master \
+  --server "$KCADM_SERVER" --realm master \
   --user "$KC_ADMIN_USER" --password "$KC_ADMIN_PASSWORD" >/dev/null
 MSYS_NO_PATHCONV=1 oc exec "$KEYCLOAK_POD" -- /opt/keycloak/bin/kcadm.sh set-password \
   -r mayabanque --username alice --new-password "$ALICE_PASSWORD" >/dev/null
