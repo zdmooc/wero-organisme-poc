@@ -16,8 +16,9 @@ spec:
       containers:
         - name: redpanda
           image: docker.redpanda.com/redpandadata/redpanda:v26.2.2
-          command: ["redpanda"]
+          command: ["rpk"]
           args:
+            - redpanda
             - start
             - --kafka-addr=internal://0.0.0.0:9092
             - --advertise-kafka-addr=internal://kafka:9092
@@ -26,6 +27,12 @@ spec:
             - --mode=dev-container
             - --smp=1
             - --default-log-level=info
+            - --check=false
+          env:
+            - name: HOME
+              value: /tmp
+            - name: XDG_CONFIG_HOME
+              value: /tmp/.config
           ports:
             - name: kafka
               containerPort: 9092
