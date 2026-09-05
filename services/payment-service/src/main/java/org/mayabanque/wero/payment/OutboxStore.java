@@ -1,6 +1,6 @@
 package org.mayabanque.wero.payment;
 
-import io.quarkus.panache.common.Page;
+import io.quarkus.hibernate.orm.panache.PanacheQuery;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.transaction.Transactional;
 import java.time.Instant;
@@ -11,10 +11,12 @@ public class OutboxStore {
 
     @Transactional
     public List<PendingEvent> loadPending(int batchSize) {
-        return OutboxEventEntity.find("publishedAt is null order by id")
-                .page(Page.ofSize(batchSize))
-                .list()
-                .stream()
+        // Keep the entity type explicit before mapping. Chaining find/page/list/stream
+        // directly can make javac infer PanacheEntityBase for the stream element.
+        PanacheQuery<OutboxEventEntity> query = OutboxEventEntity.find("publishedAt is null order by id");
+        List<OutboxEventEntity> entities = query.page(0, batchSize).list();
+
+        return entities.stream()
                 .map(entity -> new PendingEvent(
                         entity.id,
                         entity.aggregateId,
