@@ -1,12 +1,14 @@
-name: V2 compile checks
+name: V2/V2B compile checks
 
 on:
   push:
     branches:
       - v2-state-ledger-reconciliation
+      - v2b-kafka-outbox-events
   pull_request:
     branches:
       - v1-single-immediate
+      - v2-state-ledger-reconciliation
 
 jobs:
   compile:
@@ -17,6 +19,7 @@ jobs:
         module:
           - services/payment-service
           - services/consumer-psp
+          - services/event-audit-service
           - mocks/mock-wero
           - mocks/mock-sct-inst
     steps:
