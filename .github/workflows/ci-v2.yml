@@ -1,4 +1,4 @@
-name: V2/V2B/V3 compile checks
+name: V2/V2B/V3/V3B compile checks
 
 on:
   push:
@@ -6,11 +6,13 @@ on:
       - v2-state-ledger-reconciliation
       - v2b-kafka-outbox-events
       - v3-security-consent-sca
+      - v3b-api-gateway-zero-trust
   pull_request:
     branches:
       - v1-single-immediate
       - v2-state-ledger-reconciliation
       - v2b-kafka-outbox-events
+      - v3-security-consent-sca
 
 jobs:
   compile:
@@ -19,6 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         module:
+          - services/api-gateway
           - services/payment-service
           - services/consumer-psp
           - services/event-audit-service
