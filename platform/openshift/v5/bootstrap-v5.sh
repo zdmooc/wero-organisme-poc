@@ -11,6 +11,17 @@ command -v oc >/dev/null 2>&1 || { echo "ERROR: oc is required"; exit 1; }
 command -v openssl >/dev/null 2>&1 || { echo "ERROR: openssl is required"; exit 1; }
 oc whoami >/dev/null 2>&1 || { echo "ERROR: login to OpenShift first"; exit 1; }
 
+# V5 installs/manages a cluster-wide Operator and resources in openshift-gitops.
+# Require an administrative session up front instead of failing halfway through bootstrap.
+if [[ "$(oc auth can-i '*' '*' --all-namespaces 2>/dev/null || true)" != "yes" ]]; then
+  echo "ERROR: V5 bootstrap requires a cluster-admin session."
+  echo "On CRC, run 'crc console --credentials' locally and use the kubeadmin login it displays, then rerun this script."
+  echo "Do not paste credentials into Git or the chat."
+  exit 1
+fi
+
+echo "==> Administrative OpenShift session confirmed: $(oc whoami)"
+
 oc get project "$PROJECT" >/dev/null 2>&1 || oc new-project "$PROJECT" >/dev/null
 oc project "$PROJECT" >/dev/null
 
