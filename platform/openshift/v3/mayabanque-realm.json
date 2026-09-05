@@ -1,0 +1,49 @@
+{
+  "realm": "mayabanque",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "accessTokenLifespan": 300,
+  "roles": {
+    "realm": [
+      {"name": "payment-create"},
+      {"name": "payment-read"},
+      {"name": "payment-reconcile"},
+      {"name": "consent-create"},
+      {"name": "consent-sca"},
+      {"name": "audit-read"}
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "mayabanque-cli",
+      "name": "MayaBanque CLI POC",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false
+    }
+  ],
+  "users": [
+    {
+      "username": "alice",
+      "enabled": true,
+      "realmRoles": [
+        "payment-create",
+        "payment-read",
+        "payment-reconcile",
+        "consent-create",
+        "consent-sca",
+        "audit-read"
+      ]
+    },
+    {
+      "username": "auditor",
+      "enabled": true,
+      "realmRoles": ["payment-read", "audit-read"]
+    }
+  ]
+}
