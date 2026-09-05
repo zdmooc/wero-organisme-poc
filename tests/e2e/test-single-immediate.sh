@@ -5,6 +5,7 @@ HOST="${1:-$(oc get route payment-service -n wero-poc -o jsonpath='{.spec.host}'
 
 curl -sS -X POST "http://${HOST}/payments/single-immediate" \
   -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: idem-pay-000001' \
   -d '{
     "paymentId":"PAY-000001",
     "amountCents":1250,
