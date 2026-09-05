@@ -10,5 +10,6 @@ import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 @Produces(MediaType.APPLICATION_JSON)
 public interface SctInstClient {
     @POST
-    WeroMockResource.TransferResponse transfer(WeroMockResource.TransferRequest request);
+    WeroMockResource.TransferResponse transfer(@HeaderParam("X-Correlation-Id") String correlationId,
+                                               WeroMockResource.TransferRequest request);
 }

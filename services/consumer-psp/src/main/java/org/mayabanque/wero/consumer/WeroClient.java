@@ -10,5 +10,6 @@ import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 @Produces(MediaType.APPLICATION_JSON)
 public interface WeroClient {
     @POST
-    ConsumerPaymentResource.PaymentResponse forward(ConsumerPaymentResource.PaymentRequest request);
+    ConsumerPaymentResource.PaymentResponse forward(@HeaderParam("X-Correlation-Id") String correlationId,
+                                                    ConsumerPaymentResource.PaymentRequest request);
 }
