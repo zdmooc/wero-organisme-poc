@@ -56,12 +56,15 @@ ALICE_PASSWORD="$(oc get secret wero-v3-demo-users -o jsonpath='{.data.ALICE_PAS
 AUDITOR_PASSWORD="$(oc get secret wero-v3-demo-users -o jsonpath='{.data.AUDITOR_PASSWORD}' | base64 -d)"
 KEYCLOAK_POD="$(oc get pods -l app=keycloak -o jsonpath='{.items[0].metadata.name}')"
 
-oc exec "$KEYCLOAK_POD" -- /opt/keycloak/bin/kcadm.sh config credentials \
+# Git Bash/MSYS rewrites Linux container paths such as /opt/keycloak/... into
+# C:/Program Files/Git/opt/keycloak/... before invoking oc.exe. Disable that
+# conversion only for oc exec so local Windows paths used elsewhere still work.
+MSYS_NO_PATHCONV=1 oc exec "$KEYCLOAK_POD" -- /opt/keycloak/bin/kcadm.sh config credentials \
   --server http://localhost:8080 --realm master \
   --user "$KC_ADMIN_USER" --password "$KC_ADMIN_PASSWORD" >/dev/null
-oc exec "$KEYCLOAK_POD" -- /opt/keycloak/bin/kcadm.sh set-password \
+MSYS_NO_PATHCONV=1 oc exec "$KEYCLOAK_POD" -- /opt/keycloak/bin/kcadm.sh set-password \
   -r mayabanque --username alice --new-password "$ALICE_PASSWORD" >/dev/null
-oc exec "$KEYCLOAK_POD" -- /opt/keycloak/bin/kcadm.sh set-password \
+MSYS_NO_PATHCONV=1 oc exec "$KEYCLOAK_POD" -- /opt/keycloak/bin/kcadm.sh set-password \
   -r mayabanque --username auditor --new-password "$AUDITOR_PASSWORD" >/dev/null
 
 echo "==> Keycloak demo identities configured"
