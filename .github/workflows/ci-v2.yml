@@ -1,4 +1,4 @@
-name: V2/V2B/V3/V3B compile checks
+name: V2/V2B/V3/V3B/V4 compile checks
 
 on:
   push:
@@ -7,12 +7,14 @@ on:
       - v2b-kafka-outbox-events
       - v3-security-consent-sca
       - v3b-api-gateway-zero-trust
+      - v4-observability-e2e
   pull_request:
     branches:
       - v1-single-immediate
       - v2-state-ledger-reconciliation
       - v2b-kafka-outbox-events
       - v3-security-consent-sca
+      - v3b-api-gateway-zero-trust
 
 jobs:
   compile:

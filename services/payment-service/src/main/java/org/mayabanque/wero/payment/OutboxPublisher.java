@@ -1,11 +1,21 @@
 package org.mayabanque.wero.payment;
 
+import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanContext;
+import io.opentelemetry.api.trace.SpanKind;
+import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.api.trace.TraceFlags;
+import io.opentelemetry.api.trace.TraceState;
+import io.opentelemetry.context.Context;
+import io.opentelemetry.context.Scope;
 import io.quarkus.panache.common.Page;
 import io.quarkus.scheduler.Scheduled;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.transaction.Transactional;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.Properties;
@@ -15,18 +25,16 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
 
 @ApplicationScoped
 public class OutboxPublisher {
 
-    @ConfigProperty(name = "kafka.bootstrap.servers")
-    String bootstrapServers;
+    private static final Logger LOG = Logger.getLogger(OutboxPublisher.class);
 
-    @ConfigProperty(name = "wero.events.topic", defaultValue = "payment-events")
-    String topic;
-
-    @ConfigProperty(name = "wero.outbox.batch-size", defaultValue = "50")
-    int batchSize;
+    @ConfigProperty(name = "kafka.bootstrap.servers") String bootstrapServers;
+    @ConfigProperty(name = "wero.events.topic", defaultValue = "payment-events") String topic;
+    @ConfigProperty(name = "wero.outbox.batch-size", defaultValue = "50") int batchSize;
 
     KafkaProducer<String, String> producer;
 
@@ -44,9 +52,7 @@ public class OutboxPublisher {
 
     @PreDestroy
     void close() {
-        if (producer != null) {
-            producer.close();
-        }
+        if (producer != null) producer.close();
     }
 
     @Scheduled(every = "1s", concurrentExecution = Scheduled.ConcurrentExecution.SKIP)
@@ -58,17 +64,64 @@ public class OutboxPublisher {
                 .list();
 
         for (OutboxEventEntity row : pending) {
-            try {
+            Context parent = parentContext(row.traceparent);
+            Span span = GlobalOpenTelemetry.getTracer("mayabanque-outbox")
+                    .spanBuilder("payment-events publish")
+                    .setSpanKind(SpanKind.PRODUCER)
+                    .setParent(parent)
+                    .startSpan();
+            span.setAttribute("messaging.system", "kafka");
+            span.setAttribute("messaging.destination.name", topic);
+            span.setAttribute("wero.payment_id", row.aggregateId);
+            span.setAttribute("wero.event_id", row.eventId);
+            if (row.correlationId != null) span.setAttribute("wero.correlation_id", row.correlationId);
+
+            try (Scope ignored = span.makeCurrent()) {
                 ProducerRecord<String, String> record = new ProducerRecord<>(topic, row.aggregateId, row.payload);
+                String outgoingTraceparent = traceparent(span.getSpanContext());
+                if (outgoingTraceparent != null) {
+                    record.headers().add("traceparent", outgoingTraceparent.getBytes(StandardCharsets.UTF_8));
+                }
+                if (row.correlationId != null) {
+                    record.headers().add("X-Correlation-Id", row.correlationId.getBytes(StandardCharsets.UTF_8));
+                }
                 producer.send(record).get(3, TimeUnit.SECONDS);
                 row.publishedAt = Instant.now();
                 row.publishAttempts++;
                 row.lastError = null;
+                LOG.infof("correlationId=%s paymentId=%s eventId=%s Kafka published",
+                        row.correlationId, row.aggregateId, row.eventId);
             } catch (Exception e) {
                 row.publishAttempts++;
                 row.lastError = truncate(e.getClass().getSimpleName() + ": " + String.valueOf(e.getMessage()), 500);
+                span.recordException(e);
+                span.setStatus(StatusCode.ERROR, "Kafka publish failed");
+            } finally {
+                span.end();
             }
         }
+    }
+
+    private static Context parentContext(String value) {
+        SpanContext remote = parseTraceparent(value);
+        return remote.isValid() ? Context.root().with(Span.wrap(remote)) : Context.root();
+    }
+
+    static SpanContext parseTraceparent(String value) {
+        if (value == null || value.isBlank()) return SpanContext.getInvalid();
+        String[] p = value.trim().split("-");
+        if (p.length != 4 || p[1].length() != 32 || p[2].length() != 16) return SpanContext.getInvalid();
+        TraceFlags flags = "01".equalsIgnoreCase(p[3]) ? TraceFlags.getSampled() : TraceFlags.getDefault();
+        try {
+            return SpanContext.createFromRemoteParent(p[1], p[2], flags, TraceState.getDefault());
+        } catch (IllegalArgumentException e) {
+            return SpanContext.getInvalid();
+        }
+    }
+
+    static String traceparent(SpanContext context) {
+        if (context == null || !context.isValid()) return null;
+        return "00-" + context.getTraceId() + "-" + context.getSpanId() + (context.isSampled() ? "-01" : "-00");
     }
 
     private static String truncate(String value, int max) {

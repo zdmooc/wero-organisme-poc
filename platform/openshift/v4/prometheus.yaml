@@ -1,0 +1,106 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: wero-poc
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 5s
+      evaluation_interval: 5s
+    scrape_configs:
+      - job_name: api-gateway
+        metrics_path: /q/metrics
+        static_configs:
+          - targets: ['api-gateway:8080']
+      - job_name: payment-service
+        metrics_path: /q/metrics
+        static_configs:
+          - targets: ['payment-service:8080']
+      - job_name: consumer-psp
+        metrics_path: /q/metrics
+        static_configs:
+          - targets: ['consumer-psp:8080']
+      - job_name: event-audit-service
+        metrics_path: /q/metrics
+        static_configs:
+          - targets: ['event-audit-service:8080']
+      - job_name: mock-wero
+        metrics_path: /q/metrics
+        static_configs:
+          - targets: ['mock-wero:8080']
+      - job_name: mock-sct-inst
+        metrics_path: /q/metrics
+        static_configs:
+          - targets: ['mock-sct-inst:8080']
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: wero-poc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      containers:
+        - name: prometheus
+          image: quay.io/prometheus/prometheus:v3.14.0
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/tmp/prometheus
+            - --storage.tsdb.retention.time=2h
+          ports:
+            - name: web
+              containerPort: 9090
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: 9090
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: 9090
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+              readOnly: true
+            - name: data
+              mountPath: /tmp/prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: wero-poc
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - name: web
+      port: 9090
+      targetPort: 9090

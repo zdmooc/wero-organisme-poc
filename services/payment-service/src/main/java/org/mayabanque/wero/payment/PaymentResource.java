@@ -1,41 +1,31 @@
 package org.mayabanque.wero.payment;
 
+import io.opentelemetry.api.trace.Span;
 import io.quarkus.security.identity.SecurityIdentity;
 import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
-import jakarta.ws.rs.Consumes;
-import jakarta.ws.rs.GET;
-import jakarta.ws.rs.HeaderParam;
-import jakarta.ws.rs.POST;
-import jakarta.ws.rs.Path;
-import jakarta.ws.rs.PathParam;
-import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
+import org.jboss.logging.Logger;
 
 @Path("/payments")
 @Consumes(MediaType.APPLICATION_JSON)
 @Produces(MediaType.APPLICATION_JSON)
 public class PaymentResource {
 
-    @Inject
-    @RestClient
-    ConsumerPspClient consumerPsp;
+    private static final Logger LOG = Logger.getLogger(PaymentResource.class);
 
-    @Inject
-    @RestClient
-    SctInstStatusClient sctInstStatus;
-
-    @Inject
-    OutboxService outbox;
-
-    @Inject
-    SecurityIdentity identity;
+    @Inject @RestClient ConsumerPspClient consumerPsp;
+    @Inject @RestClient SctInstStatusClient sctInstStatus;
+    @Inject OutboxService outbox;
+    @Inject SecurityIdentity identity;
+    @Inject PaymentMetrics metrics;
 
     @POST
     @Path("/single-immediate")
@@ -44,49 +34,49 @@ public class PaymentResource {
     public Response create(
             @HeaderParam("Idempotency-Key") String idempotencyKey,
             @HeaderParam("X-Consent-Id") String consentId,
+            @HeaderParam("X-Correlation-Id") String correlationId,
             PaymentRequest request) {
         if (request == null || blank(request.paymentId()) || request.amountCents() <= 0 || blank(request.currency())) {
             return Response.status(Response.Status.BAD_REQUEST)
-                    .entity(new ErrorResponse("INVALID_REQUEST", "paymentId, positive amountCents and currency are required"))
-                    .build();
+                    .entity(new ErrorResponse("INVALID_REQUEST", "paymentId, positive amountCents and currency are required")).build();
         }
+
+        Span.current().setAttribute("wero.payment_id", request.paymentId());
+        if (!blank(correlationId)) Span.current().setAttribute("wero.correlation_id", correlationId);
+        LOG.infof("correlationId=%s paymentId=%s payment request", correlationId, request.paymentId());
+
         if (blank(idempotencyKey)) {
             return Response.status(Response.Status.BAD_REQUEST)
-                    .entity(new ErrorResponse("IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key header is required"))
-                    .build();
+                    .entity(new ErrorResponse("IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key header is required")).build();
         }
 
         PaymentEntity existingByKey = PaymentEntity.find("idempotencyKey", idempotencyKey).firstResult();
         if (existingByKey != null) {
             if (!samePayload(existingByKey, request)) {
                 return Response.status(Response.Status.CONFLICT)
-                        .entity(new ErrorResponse("IDEMPOTENCY_CONFLICT", "The same Idempotency-Key was already used with a different payload"))
-                        .build();
+                        .entity(new ErrorResponse("IDEMPOTENCY_CONFLICT", "The same Idempotency-Key was already used with a different payload")).build();
             }
-            return Response.ok(toResponse(existingByKey))
-                    .header("X-Idempotent-Replay", "true")
-                    .build();
+            metrics.idempotentReplay();
+            Span.current().setAttribute("wero.payment.status", existingByKey.status.name());
+            return Response.ok(toResponse(existingByKey)).header("X-Idempotent-Replay", "true").build();
         }
 
         PaymentEntity existingById = PaymentEntity.findById(request.paymentId());
         if (existingById != null) {
             return Response.status(Response.Status.CONFLICT)
-                    .entity(new ErrorResponse("PAYMENT_ID_CONFLICT", "paymentId already exists with another idempotency key"))
-                    .build();
+                    .entity(new ErrorResponse("PAYMENT_ID_CONFLICT", "paymentId already exists with another idempotency key")).build();
         }
 
         if (blank(consentId)) {
             return Response.status(Response.Status.BAD_REQUEST)
-                    .entity(new ErrorResponse("CONSENT_REQUIRED", "X-Consent-Id header is required for a new payment"))
-                    .build();
+                    .entity(new ErrorResponse("CONSENT_REQUIRED", "X-Consent-Id header is required for a new payment")).build();
         }
 
         ConsentEntity consent = ConsentEntity.findById(consentId);
         boolean sameSubject = consent != null && Objects.equals(consent.subjectId, identity.getPrincipal().getName());
         if (!sameSubject || !ConsentResource.isAuthorizedFor(consent, request)) {
             return Response.status(Response.Status.FORBIDDEN)
-                    .entity(new ErrorResponse("CONSENT_NOT_AUTHORIZED", "Consent is missing, expired, not SCA-authorized, belongs to another subject, or does not match the payment"))
-                    .build();
+                    .entity(new ErrorResponse("CONSENT_NOT_AUTHORIZED", "Consent is missing, expired, not SCA-authorized, belongs to another subject, or does not match the payment")).build();
         }
 
         Instant now = Instant.now();
@@ -103,14 +93,14 @@ public class PaymentResource {
         payment.createdAt = now;
         payment.updatedAt = now;
         payment.persistAndFlush();
-        outbox.enqueue(payment, "PAYMENT_CREATED");
+        outbox.enqueue(payment, "PAYMENT_CREATED", correlationId);
 
         try {
             payment.status = PaymentStatus.PROCESSING;
             payment.updatedAt = Instant.now();
-            outbox.enqueue(payment, "PAYMENT_PROCESSING");
+            outbox.enqueue(payment, "PAYMENT_PROCESSING", correlationId);
 
-            PaymentResponse downstream = consumerPsp.pay(request);
+            PaymentResponse downstream = consumerPsp.pay(correlationId, request);
             payment.settlementId = downstream.settlementId();
             payment.lastError = null;
             payment.status = switch (downstream.status()) {
@@ -123,19 +113,22 @@ public class PaymentResource {
             switch (payment.status) {
                 case SETTLED -> {
                     recordSettlementLedger(payment);
-                    outbox.enqueue(payment, "PAYMENT_SETTLED");
+                    outbox.enqueue(payment, "PAYMENT_SETTLED", correlationId);
                 }
-                case FAILED -> outbox.enqueue(payment, "PAYMENT_FAILED");
-                case PENDING -> outbox.enqueue(payment, "PAYMENT_PENDING");
+                case FAILED -> outbox.enqueue(payment, "PAYMENT_FAILED", correlationId);
+                case PENDING -> outbox.enqueue(payment, "PAYMENT_PENDING", correlationId);
                 default -> { }
             }
         } catch (Exception e) {
             payment.status = PaymentStatus.UNKNOWN;
             payment.lastError = truncate(e.getClass().getSimpleName() + ": " + String.valueOf(e.getMessage()), 500);
             payment.updatedAt = Instant.now();
-            outbox.enqueue(payment, "PAYMENT_UNKNOWN");
+            outbox.enqueue(payment, "PAYMENT_UNKNOWN", correlationId);
         }
 
+        metrics.paymentStatus(payment.status);
+        Span.current().setAttribute("wero.payment.status", payment.status.name());
+        LOG.infof("correlationId=%s paymentId=%s status=%s settlementId=%s", correlationId, payment.paymentId, payment.status, payment.settlementId);
         int httpStatus = payment.status == PaymentStatus.UNKNOWN || payment.status == PaymentStatus.PENDING ? 202 : 200;
         return Response.status(httpStatus).entity(toResponse(payment)).build();
     }
@@ -146,11 +139,8 @@ public class PaymentResource {
     @Transactional
     public Response get(@PathParam("paymentId") String paymentId) {
         PaymentEntity payment = PaymentEntity.findById(paymentId);
-        if (payment == null) {
-            return Response.status(Response.Status.NOT_FOUND)
-                    .entity(new ErrorResponse("PAYMENT_NOT_FOUND", paymentId))
-                    .build();
-        }
+        if (payment == null) return Response.status(Response.Status.NOT_FOUND).entity(new ErrorResponse("PAYMENT_NOT_FOUND", paymentId)).build();
+        Span.current().setAttribute("wero.payment_id", paymentId);
         return Response.ok(toDetails(payment)).build();
     }
 
@@ -160,15 +150,10 @@ public class PaymentResource {
     @Transactional
     public Response ledger(@PathParam("paymentId") String paymentId) {
         PaymentEntity payment = PaymentEntity.findById(paymentId);
-        if (payment == null) {
-            return Response.status(Response.Status.NOT_FOUND)
-                    .entity(new ErrorResponse("PAYMENT_NOT_FOUND", paymentId))
-                    .build();
-        }
+        if (payment == null) return Response.status(Response.Status.NOT_FOUND).entity(new ErrorResponse("PAYMENT_NOT_FOUND", paymentId)).build();
         List<LedgerEntryEntity> entries = LedgerEntryEntity.list("paymentId", paymentId);
         List<LedgerEntryView> result = entries.stream()
-                .map(e -> new LedgerEntryView(e.id, e.paymentId, e.entryType, e.amountCents, e.currency, e.settlementId, e.createdAt))
-                .toList();
+                .map(e -> new LedgerEntryView(e.id, e.paymentId, e.entryType, e.amountCents, e.currency, e.settlementId, e.createdAt)).toList();
         return Response.ok(result).build();
     }
 
@@ -176,22 +161,21 @@ public class PaymentResource {
     @Path("/{paymentId}/reconcile")
     @RolesAllowed("payment-reconcile")
     @Transactional
-    public Response reconcile(@PathParam("paymentId") String paymentId) {
+    public Response reconcile(@HeaderParam("X-Correlation-Id") String correlationId,
+                              @PathParam("paymentId") String paymentId) {
         PaymentEntity payment = PaymentEntity.findById(paymentId);
-        if (payment == null) {
-            return Response.status(Response.Status.NOT_FOUND)
-                    .entity(new ErrorResponse("PAYMENT_NOT_FOUND", paymentId))
-                    .build();
-        }
+        if (payment == null) return Response.status(Response.Status.NOT_FOUND).entity(new ErrorResponse("PAYMENT_NOT_FOUND", paymentId)).build();
 
+        Span.current().setAttribute("wero.payment_id", paymentId);
+        if (!blank(correlationId)) Span.current().setAttribute("wero.correlation_id", correlationId);
         PaymentStatus before = payment.status;
         SctInstStatusClient.RailStatus rail;
         try {
-            rail = sctInstStatus.get(paymentId);
+            rail = sctInstStatus.get(correlationId, paymentId);
         } catch (Exception e) {
+            metrics.reconciliation("UNAVAILABLE");
             return Response.status(202)
-                    .entity(new ReconciliationResponse(paymentId, before.name(), "UNAVAILABLE", payment.status.name(), payment.settlementId))
-                    .build();
+                    .entity(new ReconciliationResponse(paymentId, before.name(), "UNAVAILABLE", payment.status.name(), payment.settlementId)).build();
         }
 
         if ("SETTLED".equals(rail.status())) {
@@ -201,33 +185,27 @@ public class PaymentResource {
             payment.updatedAt = Instant.now();
             recordSettlementLedger(payment);
             if (before != PaymentStatus.SETTLED) {
-                outbox.enqueue(payment, "PAYMENT_RECONCILED");
-                outbox.enqueue(payment, "PAYMENT_SETTLED");
+                outbox.enqueue(payment, "PAYMENT_RECONCILED", correlationId);
+                outbox.enqueue(payment, "PAYMENT_SETTLED", correlationId);
             }
         } else if ("FAILED".equals(rail.status())) {
             payment.status = PaymentStatus.FAILED;
             payment.lastError = null;
             payment.updatedAt = Instant.now();
             if (before != PaymentStatus.FAILED) {
-                outbox.enqueue(payment, "PAYMENT_RECONCILED");
-                outbox.enqueue(payment, "PAYMENT_FAILED");
+                outbox.enqueue(payment, "PAYMENT_RECONCILED", correlationId);
+                outbox.enqueue(payment, "PAYMENT_FAILED", correlationId);
             }
         }
 
-        return Response.ok(new ReconciliationResponse(
-                paymentId,
-                before.name(),
-                rail.status(),
-                payment.status.name(),
-                payment.settlementId))
-                .build();
+        metrics.reconciliation(payment.status.name());
+        Span.current().setAttribute("wero.payment.status", payment.status.name());
+        return Response.ok(new ReconciliationResponse(paymentId, before.name(), rail.status(), payment.status.name(), payment.settlementId)).build();
     }
 
     private static void recordSettlementLedger(PaymentEntity payment) {
         long existing = LedgerEntryEntity.count("paymentId = ?1 and entryType = ?2", payment.paymentId, "SETTLEMENT");
-        if (existing > 0) {
-            return;
-        }
+        if (existing > 0) return;
         LedgerEntryEntity entry = new LedgerEntryEntity();
         entry.paymentId = payment.paymentId;
         entry.entryType = "SETTLEMENT";
@@ -239,82 +217,25 @@ public class PaymentResource {
     }
 
     private static boolean samePayload(PaymentEntity p, PaymentRequest r) {
-        return Objects.equals(p.paymentId, r.paymentId())
-                && p.amountCents == r.amountCents()
+        return Objects.equals(p.paymentId, r.paymentId()) && p.amountCents == r.amountCents()
                 && Objects.equals(p.currency, r.currency() == null ? null : r.currency().toUpperCase())
-                && Objects.equals(p.debtorAlias, r.debtorAlias())
-                && Objects.equals(p.creditorAlias, r.creditorAlias())
+                && Objects.equals(p.debtorAlias, r.debtorAlias()) && Objects.equals(p.creditorAlias, r.creditorAlias())
                 && Objects.equals(p.simulateMode, r.simulateMode());
     }
-
-    private static boolean blank(String value) {
-        return value == null || value.isBlank();
-    }
-
-    private static String truncate(String value, int max) {
-        if (value == null || value.length() <= max) return value;
-        return value.substring(0, max);
-    }
-
-    private static PaymentResponse toResponse(PaymentEntity p) {
-        return new PaymentResponse(p.paymentId, p.status.name(), p.settlementId);
-    }
-
+    private static boolean blank(String value) { return value == null || value.isBlank(); }
+    private static String truncate(String value, int max) { return value == null || value.length() <= max ? value : value.substring(0, max); }
+    private static PaymentResponse toResponse(PaymentEntity p) { return new PaymentResponse(p.paymentId, p.status.name(), p.settlementId); }
     private static PaymentDetails toDetails(PaymentEntity p) {
-        return new PaymentDetails(
-                p.paymentId,
-                p.idempotencyKey,
-                p.consentId,
-                p.amountCents,
-                p.currency,
-                p.debtorAlias,
-                p.creditorAlias,
-                p.status.name(),
-                p.settlementId,
-                p.lastError,
-                p.createdAt,
-                p.updatedAt);
+        return new PaymentDetails(p.paymentId, p.idempotencyKey, p.consentId, p.amountCents, p.currency, p.debtorAlias,
+                p.creditorAlias, p.status.name(), p.settlementId, p.lastError, p.createdAt, p.updatedAt);
     }
 
-    public record PaymentRequest(
-            String paymentId,
-            long amountCents,
-            String currency,
-            String debtorAlias,
-            String creditorAlias,
-            String simulateMode) {}
-
+    public record PaymentRequest(String paymentId, long amountCents, String currency, String debtorAlias, String creditorAlias, String simulateMode) {}
     public record PaymentResponse(String paymentId, String status, String settlementId) {}
-
-    public record PaymentDetails(
-            String paymentId,
-            String idempotencyKey,
-            String consentId,
-            long amountCents,
-            String currency,
-            String debtorAlias,
-            String creditorAlias,
-            String status,
-            String settlementId,
-            String lastError,
-            Instant createdAt,
-            Instant updatedAt) {}
-
-    public record LedgerEntryView(
-            Long id,
-            String paymentId,
-            String entryType,
-            long amountCents,
-            String currency,
-            String settlementId,
-            Instant createdAt) {}
-
-    public record ReconciliationResponse(
-            String paymentId,
-            String beforeStatus,
-            String railStatus,
-            String afterStatus,
-            String settlementId) {}
-
+    public record PaymentDetails(String paymentId, String idempotencyKey, String consentId, long amountCents, String currency,
+                                 String debtorAlias, String creditorAlias, String status, String settlementId, String lastError,
+                                 Instant createdAt, Instant updatedAt) {}
+    public record LedgerEntryView(Long id, String paymentId, String entryType, long amountCents, String currency, String settlementId, Instant createdAt) {}
+    public record ReconciliationResponse(String paymentId, String beforeStatus, String railStatus, String afterStatus, String settlementId) {}
     public record ErrorResponse(String code, String message) {}
 }
