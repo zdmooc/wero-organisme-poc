@@ -15,8 +15,14 @@ echo "==> Kafka-compatible broker (Redpanda, CRC profile)"
 oc apply -f "$ROOT/platform/openshift/v2b/kafka-redpanda.yaml"
 if ! oc rollout status deployment/kafka --timeout=240s; then
   echo "ERROR: Kafka broker did not become ready"
-  oc get pods -l app=kafka
-  oc logs deployment/kafka --tail=120 || true
+  oc get pods -l app=kafka -o wide
+  NEWEST_KAFKA_POD=$(oc get pods -l app=kafka --sort-by=.metadata.creationTimestamp -o name | tail -1)
+  if [[ -n "${NEWEST_KAFKA_POD:-}" ]]; then
+    echo "==> Logs from newest Kafka pod: $NEWEST_KAFKA_POD"
+    oc logs "$NEWEST_KAFKA_POD" --tail=120 || true
+    echo "==> Pod description"
+    oc describe "$NEWEST_KAFKA_POD" || true
+  fi
   exit 1
 fi
 
