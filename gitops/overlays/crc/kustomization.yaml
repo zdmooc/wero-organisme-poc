@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: wero-poc
+
+resources:
+  - ../../base
+
+commonAnnotations:
+  gitops.mayabanque.io/managed-by: argocd
+  gitops.mayabanque.io/environment: crc
+  gitops.mayabanque.io/version: v5
