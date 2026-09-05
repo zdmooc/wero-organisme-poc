@@ -18,18 +18,22 @@ spec:
       containers:
         - name: redpanda
           image: docker.redpanda.com/redpandadata/redpanda:v26.2.2
-          command: ["rpk"]
+          command: ["/bin/sh", "-ec"]
           args:
-            - redpanda
-            - start
-            - --kafka-addr=internal://0.0.0.0:9092
-            - --advertise-kafka-addr=internal://kafka:9092
-            - --rpc-addr=0.0.0.0:33145
-            - --advertise-rpc-addr=kafka:33145
-            - --mode=dev-container
-            - --smp=1
-            - --default-log-level=info
-            - --check=false
+            - |
+              cp /etc/redpanda/redpanda.yaml /tmp/redpanda.yaml
+              mkdir -p /tmp/redpanda-data
+              rpk redpanda config set redpanda.data_directory /tmp/redpanda-data --config /tmp/redpanda.yaml
+              exec rpk redpanda start \
+                --config /tmp/redpanda.yaml \
+                --kafka-addr=internal://0.0.0.0:9092 \
+                --advertise-kafka-addr=internal://kafka:9092 \
+                --rpc-addr=0.0.0.0:33145 \
+                --advertise-rpc-addr=kafka:33145 \
+                --mode=dev-container \
+                --smp=1 \
+                --default-log-level=info \
+                --check=false
           env:
             - name: HOME
               value: /tmp
@@ -58,12 +62,7 @@ spec:
               port: 9092
             initialDelaySeconds: 20
             periodSeconds: 10
-          volumeMounts:
-            - name: kafka-data
-              mountPath: /var/lib/redpanda/data
-      volumes:
-        - name: kafka-data
-          emptyDir: {}
+      terminationGracePeriodSeconds: 30
 ---
 apiVersion: v1
 kind: Service
