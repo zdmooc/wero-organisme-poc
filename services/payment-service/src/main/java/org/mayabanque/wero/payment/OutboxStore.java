@@ -1,51 +1,93 @@
 package org.mayabanque.wero.payment;
 
-import io.quarkus.hibernate.orm.panache.PanacheQuery;
+import io.agroal.api.AgroalDataSource;
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.transaction.Transactional;
-import java.time.Instant;
+import jakarta.inject.Inject;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
 
 @ApplicationScoped
 public class OutboxStore {
 
-    @Transactional
+    @Inject AgroalDataSource dataSource;
+
+    /**
+     * The outbox poller deliberately uses short auto-commit JDBC operations
+     * instead of JTA/Panache transactions. The scheduled publisher performs
+     * network I/O to Kafka and must never propagate a Narayana transaction
+     * across scheduler/executor threads.
+     */
     public List<PendingEvent> loadPending(int batchSize) {
-        // Keep the entity type explicit before mapping. Chaining find/page/list/stream
-        // directly can make javac infer PanacheEntityBase for the stream element.
-        PanacheQuery<OutboxEventEntity> query = OutboxEventEntity.find("publishedAt is null order by id");
-        List<OutboxEventEntity> entities = query.page(0, batchSize).list();
+        String sql = """
+                select id, aggregate_id, event_id, payload, correlation_id, traceparent
+                  from outbox_events
+                 where published_at is null
+                 order by id
+                 limit ?
+                """;
 
-        return entities.stream()
-                .map(entity -> new PendingEvent(
-                        entity.id,
-                        entity.aggregateId,
-                        entity.eventId,
-                        entity.payload,
-                        entity.correlationId,
-                        entity.traceparent))
-                .toList();
+        List<PendingEvent> result = new ArrayList<>();
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setInt(1, batchSize);
+            try (ResultSet rs = statement.executeQuery()) {
+                while (rs.next()) {
+                    result.add(new PendingEvent(
+                            rs.getLong("id"),
+                            rs.getString("aggregate_id"),
+                            rs.getString("event_id"),
+                            rs.getString("payload"),
+                            rs.getString("correlation_id"),
+                            rs.getString("traceparent")));
+                }
+            }
+            return result;
+        } catch (SQLException e) {
+            throw new IllegalStateException("Unable to load pending outbox events", e);
+        }
     }
 
-    @Transactional(Transactional.TxType.REQUIRES_NEW)
     public void markPublished(Long id) {
-        OutboxEventEntity row = OutboxEventEntity.findById(id);
-        if (row == null || row.publishedAt != null) {
-            return;
+        String sql = """
+                update outbox_events
+                   set published_at = ?,
+                       publish_attempts = publish_attempts + 1,
+                       last_error = null
+                 where id = ?
+                   and published_at is null
+                """;
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setObject(1, OffsetDateTime.now(ZoneOffset.UTC));
+            statement.setLong(2, id);
+            statement.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("Unable to mark outbox event published id=" + id, e);
         }
-        row.publishedAt = Instant.now();
-        row.publishAttempts++;
-        row.lastError = null;
     }
 
-    @Transactional(Transactional.TxType.REQUIRES_NEW)
     public void markFailed(Long id, String error) {
-        OutboxEventEntity row = OutboxEventEntity.findById(id);
-        if (row == null || row.publishedAt != null) {
-            return;
+        String sql = """
+                update outbox_events
+                   set publish_attempts = publish_attempts + 1,
+                       last_error = ?
+                 where id = ?
+                   and published_at is null
+                """;
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, error);
+            statement.setLong(2, id);
+            statement.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("Unable to mark outbox event failed id=" + id, e);
         }
-        row.publishAttempts++;
-        row.lastError = error;
     }
 
     public record PendingEvent(
