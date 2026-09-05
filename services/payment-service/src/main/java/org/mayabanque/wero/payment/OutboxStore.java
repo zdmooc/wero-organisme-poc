@@ -1,6 +1,7 @@
 package org.mayabanque.wero.payment;
 
 import io.agroal.api.AgroalDataSource;
+import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.sql.Connection;
@@ -15,13 +16,14 @@ import java.util.List;
 @ApplicationScoped
 public class OutboxStore {
 
-    @Inject AgroalDataSource dataSource;
+    @Inject
+    @DataSource("outbox")
+    AgroalDataSource dataSource;
 
     /**
-     * The outbox poller deliberately uses short auto-commit JDBC operations
-     * instead of JTA/Panache transactions. The scheduled publisher performs
-     * network I/O to Kafka and must never propagate a Narayana transaction
-     * across scheduler/executor threads.
+     * The outbox poller uses a dedicated non-JTA datasource. This keeps the
+     * scheduler/Kafka path completely separate from the primary Hibernate/JTA
+     * datasource used by consent and payment transactions.
      */
     public List<PendingEvent> loadPending(int batchSize) {
         String sql = """
