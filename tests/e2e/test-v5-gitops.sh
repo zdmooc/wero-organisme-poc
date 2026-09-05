@@ -66,6 +66,40 @@ done
 }
 echo "api-gateway drift healed back to replicas=1"
 
+# Synced/Healthy only proves desired-state convergence. Before the V4 HTTP
+# regression, also prove the recreated/healed gateway is actually routable:
+# Deployment rolled out, Service selector is correct, EndpointSlice has an
+# address, and the OpenShift Route returns 200 on /health/ready.
+echo "==> 6b. Gateway dataplane is ready after self-heal"
+oc rollout status deployment/api-gateway -n "$PROJECT" --timeout=180s >/dev/null
+SERVICE_APP_SELECTOR="$(oc get service api-gateway -n "$PROJECT" -o jsonpath='{.spec.selector.app}' 2>/dev/null || true)"
+SERVICE_LEGACY_SELECTOR="$(oc get service api-gateway -n "$PROJECT" -o jsonpath='{.spec.selector.deployment}' 2>/dev/null || true)"
+[[ "$SERVICE_APP_SELECTOR" == "api-gateway" && -z "$SERVICE_LEGACY_SELECTOR" ]] || {
+  echo "api-gateway Service selector is not exactly app=api-gateway"
+  oc get service api-gateway -n "$PROJECT" -o jsonpath='{.spec.selector}{"\n"}'
+  exit 1
+}
+
+GATEWAY_HOST="$(oc get route api-gateway -n "$PROJECT" -o jsonpath='{.spec.host}')"
+DATAPLANE_READY=false
+for _ in $(seq 1 36); do
+  ENDPOINT_IPS="$(oc get endpointslice -n "$PROJECT" -l 'kubernetes.io/service-name=api-gateway' \
+    -o jsonpath='{range .items[*].endpoints[*]}{range .addresses[*]}{.}{" "}{end}{end}' 2>/dev/null || true)"
+  HTTP_CODE="$(curl -sS -o /dev/null -w '%{http_code}' "http://${GATEWAY_HOST}/health/ready" 2>/dev/null || true)"
+  if [[ -n "${ENDPOINT_IPS// /}" && "$HTTP_CODE" == "200" ]]; then
+    DATAPLANE_READY=true
+    break
+  fi
+  sleep 5
+done
+[[ "$DATAPLANE_READY" == "true" ]] || {
+  echo "api-gateway dataplane did not become ready after self-heal"
+  echo "EndpointSlice addresses: ${ENDPOINT_IPS:-<none>}"
+  echo "Route health HTTP: ${HTTP_CODE:-<none>}"
+  exit 1
+}
+echo "api-gateway endpoint + Route ready (HTTP 200)"
+
 echo "==> 7. V4 business + observability regression through GitOps deployment"
 "$ROOT/tests/e2e/test-v4-observability.sh"
 
