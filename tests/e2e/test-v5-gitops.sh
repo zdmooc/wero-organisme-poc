@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${ALICE_TOKEN:?Set ALICE_TOKEN before running this test}"
-: "${AUDITOR_TOKEN:?Set AUDITOR_TOKEN before running this test}"
-: "${SCA_CODE:?Set SCA_CODE before running this test}"
-
 PROJECT=wero-poc
 GITOPS_NS=openshift-gitops
 APP=wero-poc-crc
@@ -30,6 +26,45 @@ service_backend_addresses() {
   printf '%s' "$addresses"
 }
 
+refresh_demo_tokens() {
+  local kc_host alice_password auditor_password
+
+  kc_host="$(oc get route keycloak -n "$PROJECT" -o jsonpath='{.spec.host}')"
+  alice_password="$(oc get secret wero-v3-demo-users -n "$PROJECT" \
+    -o jsonpath='{.data.ALICE_PASSWORD}' | base64 -d)"
+  auditor_password="$(oc get secret wero-v3-demo-users -n "$PROJECT" \
+    -o jsonpath='{.data.AUDITOR_PASSWORD}' | base64 -d)"
+
+  export SCA_CODE="${SCA_CODE:-$(oc get secret wero-v3-app -n "$PROJECT" \
+    -o jsonpath='{.data.SCA_DEMO_CODE}' | base64 -d)}"
+
+  export ALICE_TOKEN="$(curl -sS -X POST \
+    "http://${kc_host}/realms/mayabanque/protocol/openid-connect/token" \
+    -H 'Content-Type: application/x-www-form-urlencoded' \
+    -d 'client_id=mayabanque-cli' \
+    -d 'grant_type=password' \
+    -d 'username=alice' \
+    --data-urlencode "password=${alice_password}" \
+    | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')"
+
+  export AUDITOR_TOKEN="$(curl -sS -X POST \
+    "http://${kc_host}/realms/mayabanque/protocol/openid-connect/token" \
+    -H 'Content-Type: application/x-www-form-urlencoded' \
+    -d 'client_id=mayabanque-cli' \
+    -d 'grant_type=password' \
+    -d 'username=auditor' \
+    --data-urlencode "password=${auditor_password}" \
+    | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')"
+
+  unset alice_password auditor_password
+
+  [[ -n "$ALICE_TOKEN" ]] || { echo "Failed to obtain fresh Alice JWT"; exit 1; }
+  [[ -n "$AUDITOR_TOKEN" ]] || { echo "Failed to obtain fresh Auditor JWT"; exit 1; }
+  [[ -n "$SCA_CODE" ]] || { echo "SCA demo code is unavailable"; exit 1; }
+
+  echo "fresh demo JWTs acquired (values not printed)"
+}
+
 echo "==> 1. OpenShift GitOps / Argo CD is installed"
 oc get subscription openshift-gitops-operator -n openshift-operators >/dev/null
 oc get deployment openshift-gitops-server -n "$GITOPS_NS" >/dev/null
@@ -43,8 +78,8 @@ echo "sync=$SYNC health=$HEALTH"
 [[ "$HEALTH" == "Healthy" ]]
 
 echo "==> 3. Runtime desired state comes from Git/Kustomize"
-MANAGED="$(oc get deployment api-gateway -n "$PROJECT" -o jsonpath='{.metadata.annotations.gitops\\.mayabanque\\.io/managed-by}')"
-ENVIRONMENT="$(oc get deployment api-gateway -n "$PROJECT" -o jsonpath='{.metadata.annotations.gitops\\.mayabanque\\.io/environment}')"
+MANAGED="$(oc get deployment api-gateway -n "$PROJECT" -o jsonpath='{.metadata.annotations.gitops\.mayabanque\.io/managed-by}')"
+ENVIRONMENT="$(oc get deployment api-gateway -n "$PROJECT" -o jsonpath='{.metadata.annotations.gitops\.mayabanque\.io/environment}')"
 [[ "$MANAGED" == "argocd" ]]
 [[ "$ENVIRONMENT" == "crc" ]]
 ! grep -R -E '^[[:space:]]*kind:[[:space:]]*Secret[[:space:]]*$' "$ROOT/gitops/base" "$ROOT/gitops/overlays" >/dev/null
@@ -118,6 +153,9 @@ done
   exit 1
 }
 echo "api-gateway backend + Route ready (HTTP 200)"
+
+echo "==> 6c. Refresh short-lived demo JWTs before business regression"
+refresh_demo_tokens
 
 echo "==> 7. V4 business + observability regression through GitOps deployment"
 "$ROOT/tests/e2e/test-v4-observability.sh"
