@@ -10,6 +10,26 @@ GITOPS_NS=openshift-gitops
 APP=wero-poc-crc
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
+service_backend_addresses() {
+  local service_name="$1"
+  local addresses=""
+
+  # Prefer EndpointSlice (current Kubernetes API). Some CRC/OpenShift client
+  # combinations can expose an empty result through the short resource alias,
+  # so use the fully-qualified resource first and fall back to legacy Endpoints.
+  addresses="$(oc get endpointslices.discovery.k8s.io -n "$PROJECT" \
+    -l "kubernetes.io/service-name=${service_name}" \
+    -o jsonpath='{range .items[*].endpoints[*]}{range .addresses[*]}{.}{" "}{end}{end}' \
+    2>/dev/null || true)"
+
+  if [[ -z "${addresses// /}" ]]; then
+    addresses="$(oc get endpoints "$service_name" -n "$PROJECT" \
+      -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null || true)"
+  fi
+
+  printf '%s' "$addresses"
+}
+
 echo "==> 1. OpenShift GitOps / Argo CD is installed"
 oc get subscription openshift-gitops-operator -n openshift-operators >/dev/null
 oc get deployment openshift-gitops-server -n "$GITOPS_NS" >/dev/null
@@ -23,8 +43,8 @@ echo "sync=$SYNC health=$HEALTH"
 [[ "$HEALTH" == "Healthy" ]]
 
 echo "==> 3. Runtime desired state comes from Git/Kustomize"
-MANAGED="$(oc get deployment api-gateway -n "$PROJECT" -o jsonpath='{.metadata.annotations.gitops\.mayabanque\.io/managed-by}')"
-ENVIRONMENT="$(oc get deployment api-gateway -n "$PROJECT" -o jsonpath='{.metadata.annotations.gitops\.mayabanque\.io/environment}')"
+MANAGED="$(oc get deployment api-gateway -n "$PROJECT" -o jsonpath='{.metadata.annotations.gitops\\.mayabanque\\.io/managed-by}')"
+ENVIRONMENT="$(oc get deployment api-gateway -n "$PROJECT" -o jsonpath='{.metadata.annotations.gitops\\.mayabanque\\.io/environment}')"
 [[ "$MANAGED" == "argocd" ]]
 [[ "$ENVIRONMENT" == "crc" ]]
 ! grep -R -E '^[[:space:]]*kind:[[:space:]]*Secret[[:space:]]*$' "$ROOT/gitops/base" "$ROOT/gitops/overlays" >/dev/null
@@ -66,10 +86,8 @@ done
 }
 echo "api-gateway drift healed back to replicas=1"
 
-# Synced/Healthy only proves desired-state convergence. Before the V4 HTTP
-# regression, also prove the recreated/healed gateway is actually routable:
-# Deployment rolled out, Service selector is correct, EndpointSlice has an
-# address, and the OpenShift Route returns 200 on /health/ready.
+# Synced/Healthy proves desired-state convergence. Before the V4 HTTP
+# regression, also prove the healed gateway is actually routable.
 echo "==> 6b. Gateway dataplane is ready after self-heal"
 oc rollout status deployment/api-gateway -n "$PROJECT" --timeout=180s >/dev/null
 SERVICE_APP_SELECTOR="$(oc get service api-gateway -n "$PROJECT" -o jsonpath='{.spec.selector.app}' 2>/dev/null || true)"
@@ -82,9 +100,10 @@ SERVICE_LEGACY_SELECTOR="$(oc get service api-gateway -n "$PROJECT" -o jsonpath=
 
 GATEWAY_HOST="$(oc get route api-gateway -n "$PROJECT" -o jsonpath='{.spec.host}')"
 DATAPLANE_READY=false
+ENDPOINT_IPS=""
+HTTP_CODE=""
 for _ in $(seq 1 36); do
-  ENDPOINT_IPS="$(oc get endpointslice -n "$PROJECT" -l 'kubernetes.io/service-name=api-gateway' \
-    -o jsonpath='{range .items[*].endpoints[*]}{range .addresses[*]}{.}{" "}{end}{end}' 2>/dev/null || true)"
+  ENDPOINT_IPS="$(service_backend_addresses api-gateway)"
   HTTP_CODE="$(curl -sS -o /dev/null -w '%{http_code}' "http://${GATEWAY_HOST}/health/ready" 2>/dev/null || true)"
   if [[ -n "${ENDPOINT_IPS// /}" && "$HTTP_CODE" == "200" ]]; then
     DATAPLANE_READY=true
@@ -94,11 +113,11 @@ for _ in $(seq 1 36); do
 done
 [[ "$DATAPLANE_READY" == "true" ]] || {
   echo "api-gateway dataplane did not become ready after self-heal"
-  echo "EndpointSlice addresses: ${ENDPOINT_IPS:-<none>}"
+  echo "Backend addresses: ${ENDPOINT_IPS:-<none>}"
   echo "Route health HTTP: ${HTTP_CODE:-<none>}"
   exit 1
 }
-echo "api-gateway endpoint + Route ready (HTTP 200)"
+echo "api-gateway backend + Route ready (HTTP 200)"
 
 echo "==> 7. V4 business + observability regression through GitOps deployment"
 "$ROOT/tests/e2e/test-v4-observability.sh"
