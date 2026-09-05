@@ -19,6 +19,9 @@ public class PaymentEntity extends PanacheEntityBase {
     @Column(name = "idempotency_key", nullable = false, unique = true, length = 120)
     public String idempotencyKey;
 
+    @Column(name = "consent_id", length = 80)
+    public String consentId;
+
     @Column(name = "amount_cents", nullable = false)
     public long amountCents;
 

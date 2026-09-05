@@ -1,5 +1,7 @@
 package org.mayabanque.wero.payment;
 
+import io.quarkus.security.identity.SecurityIdentity;
+import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import jakarta.ws.rs.Consumes;
@@ -32,10 +34,17 @@ public class PaymentResource {
     @Inject
     OutboxService outbox;
 
+    @Inject
+    SecurityIdentity identity;
+
     @POST
     @Path("/single-immediate")
+    @RolesAllowed("payment-create")
     @Transactional
-    public Response create(@HeaderParam("Idempotency-Key") String idempotencyKey, PaymentRequest request) {
+    public Response create(
+            @HeaderParam("Idempotency-Key") String idempotencyKey,
+            @HeaderParam("X-Consent-Id") String consentId,
+            PaymentRequest request) {
         if (request == null || blank(request.paymentId()) || request.amountCents() <= 0 || blank(request.currency())) {
             return Response.status(Response.Status.BAD_REQUEST)
                     .entity(new ErrorResponse("INVALID_REQUEST", "paymentId, positive amountCents and currency are required"))
@@ -66,10 +75,25 @@ public class PaymentResource {
                     .build();
         }
 
+        if (blank(consentId)) {
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity(new ErrorResponse("CONSENT_REQUIRED", "X-Consent-Id header is required for a new payment"))
+                    .build();
+        }
+
+        ConsentEntity consent = ConsentEntity.findById(consentId);
+        boolean sameSubject = consent != null && Objects.equals(consent.subjectId, identity.getPrincipal().getName());
+        if (!sameSubject || !ConsentResource.isAuthorizedFor(consent, request)) {
+            return Response.status(Response.Status.FORBIDDEN)
+                    .entity(new ErrorResponse("CONSENT_NOT_AUTHORIZED", "Consent is missing, expired, not SCA-authorized, belongs to another subject, or does not match the payment"))
+                    .build();
+        }
+
         Instant now = Instant.now();
         PaymentEntity payment = new PaymentEntity();
         payment.paymentId = request.paymentId();
         payment.idempotencyKey = idempotencyKey;
+        payment.consentId = consentId;
         payment.amountCents = request.amountCents();
         payment.currency = request.currency().toUpperCase();
         payment.debtorAlias = request.debtorAlias();
@@ -106,8 +130,6 @@ public class PaymentResource {
                 default -> { }
             }
         } catch (Exception e) {
-            // A timeout after submission is UNKNOWN, never an automatic FAILED.
-            // The outbox event and the payment state commit atomically in PostgreSQL.
             payment.status = PaymentStatus.UNKNOWN;
             payment.lastError = truncate(e.getClass().getSimpleName() + ": " + String.valueOf(e.getMessage()), 500);
             payment.updatedAt = Instant.now();
@@ -120,6 +142,7 @@ public class PaymentResource {
 
     @GET
     @Path("/{paymentId}")
+    @RolesAllowed("payment-read")
     @Transactional
     public Response get(@PathParam("paymentId") String paymentId) {
         PaymentEntity payment = PaymentEntity.findById(paymentId);
@@ -133,6 +156,7 @@ public class PaymentResource {
 
     @GET
     @Path("/{paymentId}/ledger")
+    @RolesAllowed("payment-read")
     @Transactional
     public Response ledger(@PathParam("paymentId") String paymentId) {
         PaymentEntity payment = PaymentEntity.findById(paymentId);
@@ -150,6 +174,7 @@ public class PaymentResource {
 
     @POST
     @Path("/{paymentId}/reconcile")
+    @RolesAllowed("payment-reconcile")
     @Transactional
     public Response reconcile(@PathParam("paymentId") String paymentId) {
         PaymentEntity payment = PaymentEntity.findById(paymentId);
@@ -239,6 +264,7 @@ public class PaymentResource {
         return new PaymentDetails(
                 p.paymentId,
                 p.idempotencyKey,
+                p.consentId,
                 p.amountCents,
                 p.currency,
                 p.debtorAlias,
@@ -263,6 +289,7 @@ public class PaymentResource {
     public record PaymentDetails(
             String paymentId,
             String idempotencyKey,
+            String consentId,
             long amountCents,
             String currency,
             String debtorAlias,

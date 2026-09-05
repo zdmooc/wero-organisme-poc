@@ -1,5 +1,6 @@
 package org.mayabanque.wero.audit;
 
+import jakarta.annotation.security.RolesAllowed;
 import jakarta.transaction.Transactional;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
@@ -15,6 +16,7 @@ public class AuditResource {
 
     @GET
     @Path("/{paymentId}")
+    @RolesAllowed("audit-read")
     @Transactional
     public List<AuditEventView> byPayment(@PathParam("paymentId") String paymentId) {
         List<AuditEventEntity> rows = AuditEventEntity.list("paymentId = ?1 order by id", paymentId);
