@@ -9,7 +9,7 @@ public class PaymentMetrics {
     @Inject MeterRegistry registry;
 
     public void paymentStatus(PaymentStatus status) {
-        registry.counter("wero.payments.total", "status", status.name()).increment();
+        registry.counter("wero.payments", "status", status.name()).increment();
     }
 
     public void idempotentReplay() {

@@ -13,33 +13,14 @@ import java.util.List;
 @Path("/audit/events")
 @Produces(MediaType.APPLICATION_JSON)
 public class AuditResource {
-
-    @GET
-    @Path("/{paymentId}")
-    @RolesAllowed("audit-read")
-    @Transactional
+    @GET @Path("/{paymentId}") @RolesAllowed("audit-read") @Transactional
     public List<AuditEventView> byPayment(@PathParam("paymentId") String paymentId) {
         List<AuditEventEntity> rows = AuditEventEntity.list("paymentId = ?1 order by id", paymentId);
-        return rows.stream()
-                .map(r -> new AuditEventView(
-                        r.id,
-                        r.eventId,
-                        r.paymentId,
-                        r.eventType,
-                        r.paymentStatus,
-                        r.kafkaPartition,
-                        r.kafkaOffset,
-                        r.receivedAt))
-                .toList();
+        return rows.stream().map(r -> new AuditEventView(r.id, r.eventId, r.paymentId, r.eventType,
+                r.paymentStatus, r.correlationId, r.traceId, r.kafkaPartition, r.kafkaOffset, r.receivedAt)).toList();
     }
 
-    public record AuditEventView(
-            Long id,
-            String eventId,
-            String paymentId,
-            String eventType,
-            String status,
-            int kafkaPartition,
-            long kafkaOffset,
-            Instant receivedAt) {}
+    public record AuditEventView(Long id, String eventId, String paymentId, String eventType, String status,
+                                 String correlationId, String traceId, int kafkaPartition, long kafkaOffset,
+                                 Instant receivedAt) {}
 }
