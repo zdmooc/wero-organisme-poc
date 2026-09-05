@@ -1,0 +1,32 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: wero-poc-crc
+  namespace: openshift-gitops
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: wero-poc
+  source:
+    repoURL: https://github.com/zdmooc/wero-organisme-poc.git
+    targetRevision: v5-gitops-argocd
+    path: gitops/overlays/crc
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: wero-poc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=false
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 10
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 1m
