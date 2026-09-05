@@ -1,5 +1,6 @@
 package org.mayabanque.wero.payment;
 
+import jakarta.annotation.security.RolesAllowed;
 import jakarta.transaction.Transactional;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
@@ -15,6 +16,7 @@ public class OutboxResource {
 
     @GET
     @Path("/{paymentId}")
+    @RolesAllowed("payment-read")
     @Transactional
     public List<OutboxEventView> byPayment(@PathParam("paymentId") String paymentId) {
         List<OutboxEventEntity> rows = OutboxEventEntity.list("aggregateId = ?1 order by id", paymentId);
