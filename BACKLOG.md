@@ -100,8 +100,9 @@
 - [x] externaliser l’état `mock-sct-inst` dans PostgreSQL partagé
 - [x] passer `mock-sct-inst` à 2 replicas + PDB `minAvailable=1`
 - [x] validation failover inter-pods SCT Inst (`V6 OK (phase B4)`: POST sur pod A, suppression pod A, GET/reconcile sur pod B, même `settlementId`, 1 rail row, 1 ledger settlement)
-- [ ] timeout Wero/EPI + état `UNKNOWN`
-- [ ] panne Wero/EPI + rétablissement contrôlé
+- [x] test panne Wero/EPI avant rail + `UNKNOWN` + anti-blind-replay ajouté
+- [ ] validation runtime Wero/EPI outage (`V6 OK (phase B5)`)
+- [ ] définir la politique de récupération contrôlée d’un `UNKNOWN` pré-rail
 - [ ] tests retry/idempotence sous panne
 - [ ] modes dégradés
 
