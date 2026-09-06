@@ -40,7 +40,7 @@ Consumer PSP
 Wero/EPI Mock
   |
   v
-SCT Inst Mock
+SCT Inst Mock --> PostgreSQL shared settlement store
 
 Outbox --> Kafka/Redpanda --> Event Audit
 
@@ -83,7 +83,7 @@ tests/               E2E, sécurité, observabilité, GitOps, résilience
 - V3B : API Gateway et isolation Zero Trust — validé CRC
 - V4 : observabilité E2E — validé CRC
 - V5 : GitOps / Kustomize / OpenShift GitOps / Argo CD — validé CRC
-- V6 : SPOF, chaos, HA et résilience — phase A validée CRC, phase B en cours
+- V6 : SPOF, chaos, HA et résilience — phases A, B1, B2, B3 et B4 validées CRC ; suite Phase B en cours
 - V7 : branchement optionnel à un sandbox externe lorsque possible
 
 ## V5 GitOps
@@ -96,12 +96,12 @@ Voir `docs/architecture/07-gitops-argocd-v5.md`.
 
 ## V6 Resilience
 
-La phase A met en N+1 les cinq workloads réellement stateless sur CRC : `api-gateway`, `payment-service`, `consumer-psp`, `event-audit-service` et `mock-wero`. Ils passent à deux replicas avec un `PodDisruptionBudget` `minAvailable=1`.
+La phase A a mis en N+1 cinq workloads initialement stateless : `api-gateway`, `payment-service`, `consumer-psp`, `event-audit-service` et `mock-wero`. Ils tournent à deux replicas avec un `PodDisruptionBudget` `minAvailable=1` et ont survécu à la suppression d’un pod sur CRC.
 
-`mock-sct-inst` reste volontairement à une seule réplique car son état de settlement est actuellement conservé en mémoire dans le processus ; le doubler sans externaliser cet état rendrait la réconciliation non déterministe.
+Les phases B1 à B3 ont ensuite validé la récupération PostgreSQL sur le même PVC, le buffering/replay transactionnel Outbox pendant une indisponibilité Kafka et le mode dégradé IAM avec JWT déjà émis pendant une panne Keycloak.
 
-La phase A est validée sur CRC : chaque workload stateless a survécu à la suppression d’un pod avec au moins un replica prêt, puis a récupéré à deux replicas. Les temps observés ont été de 10 s (API Gateway), 15 s (Payment Service), 10 s (Consumer PSP), 14 s (Event Audit) et 11 s (Wero/EPI mock). Une régression complète V5/V4 a réussi avant et après le chaos.
+La phase B4 a supprimé le SPOF fonctionnel de `mock-sct-inst` : son état de settlement est maintenant partagé dans PostgreSQL, le mock tourne à deux replicas avec PDB, et un paiement ayant été settlé sur un pod a été réconcilié depuis `UNKNOWN` par un autre pod après suppression du premier, avec le même `settlementId`, une seule ligne rail et une seule écriture ledger.
 
-PostgreSQL, Kafka/Redpanda, Keycloak et `mock-sct-inst` restent explicitement des SPOF pour la phase B. CRC étant mono-nœud, cette V6 valide la résistance à une panne de pod, pas à une panne de nœud ou de site.
+PostgreSQL, Kafka/Redpanda et Keycloak restent des dépendances mono-instance dans ce lab. CRC étant mono-nœud, ces validations couvrent des pannes de pod/processus et des indisponibilités contrôlées, pas une panne de nœud, zone ou site.
 
 Voir `docs/architecture/08-spof-chaos-ha-v6.md`.
