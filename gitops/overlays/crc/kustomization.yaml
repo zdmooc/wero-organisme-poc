@@ -9,9 +9,21 @@ resources:
 commonAnnotations:
   gitops.mayabanque.io/managed-by: argocd
   gitops.mayabanque.io/environment: crc
-  gitops.mayabanque.io/version: v5
+  gitops.mayabanque.io/version: v6
 
 patches:
+  # mock-sct-inst keeps settlement state in process memory. Running two replicas
+  # would make status/reconciliation nondeterministic, so CRC keeps it single
+  # replica until the state is externalized in the stateful-resilience phase.
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: mock-sct-inst
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
   - target:
       group: route.openshift.io
       version: v1
