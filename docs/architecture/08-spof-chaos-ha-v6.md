@@ -19,7 +19,7 @@ The V5 business invariants remain mandatory after every V6 experiment:
 
 OpenShift Local / CRC is a single-node lab. Two replicas on CRC protect against a **pod/process failure**, not against node, hypervisor, storage-zone or site failure.
 
-Therefore V6 distinguishes:
+V6 therefore distinguishes:
 
 1. **pod-level HA validated on CRC**;
 2. **stateful recovery validated on CRC**;
@@ -34,18 +34,40 @@ Therefore V6 distinguishes:
 | Consumer PSP | 1 | 2 | synchronous payment chain unavailable | N+1 + PDB + pod-kill test |
 | Event Audit | 1 | 2 | audit consumption delayed | N+1 + PDB + pod-kill test |
 | Wero/EPI mock | 1 | 2 | simulated external orchestration unavailable | N+1 + PDB + pod-kill test |
-| SCT Inst mock | 1 | 2 | simulated rail unavailable | N+1 + PDB + pod-kill test |
+| SCT Inst mock | 1 | 1 | simulated rail/status unavailable | explicit SPOF until settlement state is externalized |
 | PostgreSQL | 1 | 1 | state/ledger/outbox unavailable | explicit phase-B SPOF |
 | Redpanda/Kafka | 1 | 1 | event publication/consumption unavailable | explicit phase-B SPOF; outbox must buffer |
 | Keycloak | 1 | 1 | new token acquisition / IAM path impacted | explicit phase-B SPOF |
 | CRC node | 1 node | 1 node | complete lab outage | cannot be removed on CRC |
 | OpenShift router/DNS/control plane | CRC-managed | CRC-managed | routing/control-plane outage | observe/document; multi-node target later |
 
+## Important discovery: mock-sct-inst is stateful
+
+`mock-sct-inst` stores settlement results in an in-process map. Two replicas would therefore not share settlement state: a payment could settle on one pod while a later status/reconciliation request reaches another pod and returns `NOT_FOUND`.
+
+For phase A, CRC deliberately keeps `mock-sct-inst` at one replica. It must not be presented as stateless HA until its settlement state is moved to a shared durable store or the mock is redesigned to be deterministically stateless.
+
+## Important discovery: healthy-path timeout under N+1 load
+
+The first V6 regression exposed a `ProcessingException` on the Payment Service because the V5 `consumer-psp` read timeout was 2000 ms. On single-node CRC, adding N+1 replicas increased local scheduling contention enough for the normal synchronous chain to exceed 2 seconds.
+
+For V6 CRC the healthy-path timeout is therefore 4500 ms. This remains below the intentional `TIMEOUT_AFTER_SETTLEMENT` failure scenario, where the rail mock sleeps for 5 seconds after settlement, so the designed `UNKNOWN`/reconciliation behavior remains testable.
+
+This is a lab-specific latency budget adjustment, not a production SLO recommendation.
+
 ## Phase A — stateless N+1 and pod chaos
 
-The six Java runtime components in the synchronous/audit chain use `replicas: 2` on the V6 branch.
+Five workloads are treated as truly stateless in phase A:
 
-Each has a `PodDisruptionBudget` with `minAvailable: 1`. This protects voluntary disruption paths. The chaos test deliberately deletes a pod directly, which is stronger than a voluntary eviction and verifies that the Deployment controller recreates it while another ready replica remains.
+- `api-gateway`
+- `payment-service`
+- `consumer-psp`
+- `event-audit-service`
+- `mock-wero`
+
+Each runs with two replicas and a `PodDisruptionBudget` with `minAvailable: 1`.
+
+The chaos test deliberately deletes one pod directly, then verifies that at least one ready replica survives and that the Deployment returns to two ready replicas.
 
 V6 phase A test sequence:
 
@@ -53,17 +75,17 @@ V6 phase A test sequence:
 V5 regression on V6 desired state
         |
         v
-verify 2 ready replicas + PDB
+verify 2 ready replicas + PDB for five stateless workloads
         |
         v
-for each stateless component:
+for each stateless workload:
   delete one running pod
   verify >= 1 ready survivor
   wait for 2 ready replicas
   measure recovery seconds
         |
         v
-record PostgreSQL/Kafka/Keycloak as known SPOFs
+record PostgreSQL/Kafka/Keycloak/mock-sct-inst as known SPOFs
         |
         v
 full V5 business + observability regression again
@@ -73,16 +95,14 @@ The test is `tests/resilience/test-v6-pod-ha.sh`.
 
 ## Phase B — stateful and dependency chaos
 
-Phase B will be implemented only after phase A passes on CRC.
-
-Planned experiments:
+Phase B is implemented only after phase A passes on CRC.
 
 ### PostgreSQL pod failure
 
 - create a known payment and ledger state;
 - delete the PostgreSQL pod;
 - measure database recovery time using the existing PVC;
-- verify the previously committed payment, ledger and outbox records still exist;
+- verify previously committed payment, ledger and outbox records still exist;
 - verify a new payment succeeds after recovery;
 - record observed RTO;
 - do **not** claim database HA: a single PostgreSQL instance is still a SPOF.
@@ -102,6 +122,10 @@ Planned experiments:
 - validate failure of fresh token acquisition while IAM is unavailable;
 - restore Keycloak and measure recovery;
 - ensure no secrets are exposed by the test.
+
+### SCT Inst state and failover
+
+Before claiming N+1 for `mock-sct-inst`, externalize or redesign its settlement state, then verify that a status query can land on a different pod without losing the final settlement state.
 
 ### External Wero / SCT Inst timeout
 
@@ -126,8 +150,6 @@ CRC cannot validate this phase. The target architecture should eventually includ
 
 ## RTO / RPO evidence model
 
-V6 keeps **target** and **observed** values separate.
-
 For each chaos scenario record:
 
 - failure start timestamp;
@@ -150,16 +172,17 @@ All durable runtime resilience changes stay in Git and are reconciled by Argo CD
 
 ## Entry criteria
 
-V5 must already be runtime validated. This is satisfied by the CRC run that ended with both `V4 OK` and `V5 OK` on V5 head `7207f94`.
+V5 is runtime validated by the CRC run that ended with both `V4 OK` and `V5 OK` on V5 head `7207f94`.
 
 ## Exit criteria for V6 phase A
 
 Phase A is complete only when CRC output proves:
 
 1. Argo CD is `Synced/Healthy` on `v6-spof-chaos-ha-resilience`;
-2. all six stateless deployments have two ready replicas;
-3. all six PDBs have `minAvailable=1`;
-4. one pod can be deleted from each component without losing every ready replica;
-5. every deployment recovers to two ready replicas;
-6. the post-chaos V5 business/observability regression ends with `V4 OK` and `V5 OK`;
-7. the test ends with `V6 OK (phase A)`.
+2. all five stateless deployments have two ready replicas;
+3. all five PDBs have `minAvailable=1`;
+4. `mock-sct-inst` remains explicitly single-replica until state is externalized;
+5. one pod can be deleted from each stateless workload without losing every ready replica;
+6. every stateless deployment recovers to two ready replicas;
+7. the post-chaos V5 business/observability regression ends with `V4 OK` and `V5 OK`;
+8. the test ends with `V6 OK (phase A)`.
