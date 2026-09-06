@@ -93,19 +93,43 @@ full V5 business + observability regression again
 
 The test is `tests/resilience/test-v6-pod-ha.sh`.
 
+### Phase A runtime evidence
+
+Phase A is validated on CRC. The complete test finished with `V6 OK (phase A)` after a successful V5/V4 business and observability regression both before and after pod chaos.
+
+Observed recovery to two ready replicas after deleting one pod:
+
+| Workload | Observed recovery |
+|---|---:|
+| API Gateway | 10 s |
+| Payment Service | 15 s |
+| Consumer PSP | 10 s |
+| Event Audit | 14 s |
+| Wero/EPI mock | 11 s |
+
+At least one replica remained ready in every case. PostgreSQL, Kafka, Keycloak and `mock-sct-inst` remained explicit single-replica SPOFs and were not falsely presented as HA.
+
 ## Phase B — stateful and dependency chaos
 
-Phase B is implemented only after phase A passes on CRC.
+Phase B starts only after phase A passes on CRC. That entry criterion is now satisfied.
 
-### PostgreSQL pod failure
+### PostgreSQL pod failure — phase B1
 
-- create a known payment and ledger state;
-- delete the PostgreSQL pod;
-- measure database recovery time using the existing PVC;
-- verify previously committed payment, ledger and outbox records still exist;
-- verify a new payment succeeds after recovery;
-- record observed RTO;
-- do **not** claim database HA: a single PostgreSQL instance is still a SPOF.
+Implemented test: `tests/resilience/test-v6-postgresql-recovery.sh`.
+
+The scenario:
+
+- creates a known `SETTLED` payment through the full V5 regression;
+- captures payment, ledger and outbox evidence plus the PVC identity;
+- deletes the only PostgreSQL pod;
+- waits for a different PostgreSQL pod to become Ready and answer SQL;
+- measures observed recovery time;
+- verifies the same `postgresql-data` PVC is still attached;
+- verifies the committed payment status and selected ledger/outbox row counts survived unchanged;
+- waits for Argo CD to be `Synced/Healthy`;
+- runs a new full V5 business/observability transaction after recovery.
+
+The test reports zero rows lost for the selected pre-failure committed evidence. That result, when observed at runtime, is evidence for this CRC restart scenario only; it is **not** a claim that single-instance PostgreSQL is HA or that production RPO is universally zero.
 
 ### Kafka / Redpanda outage
 
@@ -176,13 +200,13 @@ V5 is runtime validated by the CRC run that ended with both `V4 OK` and `V5 OK` 
 
 ## Exit criteria for V6 phase A
 
-Phase A is complete only when CRC output proves:
+All phase-A criteria are now satisfied on CRC:
 
-1. Argo CD is `Synced/Healthy` on `v6-spof-chaos-ha-resilience`;
-2. all five stateless deployments have two ready replicas;
-3. all five PDBs have `minAvailable=1`;
-4. `mock-sct-inst` remains explicitly single-replica until state is externalized;
-5. one pod can be deleted from each stateless workload without losing every ready replica;
-6. every stateless deployment recovers to two ready replicas;
-7. the post-chaos V5 business/observability regression ends with `V4 OK` and `V5 OK`;
-8. the test ends with `V6 OK (phase A)`.
+1. Argo CD was `Synced/Healthy` on `v6-spof-chaos-ha-resilience`;
+2. all five stateless deployments had two ready replicas;
+3. all five PDBs had `minAvailable=1`;
+4. `mock-sct-inst` remained explicitly single-replica until state is externalized;
+5. one pod was deleted from each stateless workload without losing every ready replica;
+6. every stateless deployment recovered to two ready replicas;
+7. the post-chaos V5 business/observability regression ended with `V4 OK` and `V5 OK`;
+8. the test ended with `V6 OK (phase A)`.
