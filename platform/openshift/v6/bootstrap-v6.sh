@@ -25,6 +25,69 @@ if ! oc auth can-i update applications.argoproj.io -n "$GITOPS_NS" | grep -q '^y
   exit 1
 fi
 
+configure_keycloak_demo_users() {
+  local kc_admin_user kc_admin_password alice_password auditor_password
+  local keycloak_pod keycloak_pod_ip kcadm_server kc_host alice_token
+
+  oc rollout status deployment/keycloak -n "$PROJECT" --timeout=240s >/dev/null
+
+  kc_admin_user="$(oc get secret keycloak-admin -n "$PROJECT" -o jsonpath='{.data.username}' | base64 -d)"
+  kc_admin_password="$(oc get secret keycloak-admin -n "$PROJECT" -o jsonpath='{.data.password}' | base64 -d)"
+  alice_password="$(oc get secret wero-v3-demo-users -n "$PROJECT" -o jsonpath='{.data.ALICE_PASSWORD}' | base64 -d)"
+  auditor_password="$(oc get secret wero-v3-demo-users -n "$PROJECT" -o jsonpath='{.data.AUDITOR_PASSWORD}' | base64 -d)"
+
+  keycloak_pod="$(oc get pods -n "$PROJECT" -l app=keycloak --field-selector=status.phase=Running \
+    --sort-by=.metadata.creationTimestamp -o name | tail -1 | cut -d/ -f2)"
+  [[ -n "$keycloak_pod" ]] || { echo "Keycloak pod not found"; return 1; }
+
+  keycloak_pod_ip="$(oc get pod "$keycloak_pod" -n "$PROJECT" -o jsonpath='{.status.podIP}')"
+  kcadm_server="http://${keycloak_pod_ip}:8080"
+
+  MSYS_NO_PATHCONV=1 oc exec -n "$PROJECT" "$keycloak_pod" -- /opt/keycloak/bin/kcadm.sh config credentials \
+    --server "$kcadm_server" --realm master --user "$kc_admin_user" --password "$kc_admin_password" >/dev/null
+  MSYS_NO_PATHCONV=1 oc exec -n "$PROJECT" "$keycloak_pod" -- /opt/keycloak/bin/kcadm.sh set-password \
+    -r mayabanque --username alice --new-password "$alice_password" >/dev/null
+  MSYS_NO_PATHCONV=1 oc exec -n "$PROJECT" "$keycloak_pod" -- /opt/keycloak/bin/kcadm.sh set-password \
+    -r mayabanque --username auditor --new-password "$auditor_password" >/dev/null
+
+  # The CRC Keycloak lab uses its local dev store. A pod restart can therefore
+  # recreate the imported realm/users without the external demo passwords.
+  # Prove that direct-grant authentication works again before running E2E tests.
+  kc_host="$(oc get route keycloak -n "$PROJECT" -o jsonpath='{.spec.host}')"
+  alice_token=""
+  for _ in $(seq 1 12); do
+    alice_token="$(curl -sS -X POST \
+      "http://${kc_host}/realms/mayabanque/protocol/openid-connect/token" \
+      -H 'Content-Type: application/x-www-form-urlencoded' \
+      -d 'client_id=mayabanque-cli' \
+      -d 'grant_type=password' \
+      -d 'username=alice' \
+      --data-urlencode "password=${alice_password}" \
+      | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')"
+    [[ -n "$alice_token" ]] && break
+    sleep 5
+  done
+
+  unset kc_admin_password alice_password auditor_password alice_token
+  [[ -n "${kc_admin_user:-}" ]] || true
+  [[ -n "$keycloak_pod" ]] || return 1
+
+  # Re-check without printing any credential/token material.
+  local token_ok="false"
+  alice_password="$(oc get secret wero-v3-demo-users -n "$PROJECT" -o jsonpath='{.data.ALICE_PASSWORD}' | base64 -d)"
+  alice_token="$(curl -sS -X POST \
+    "http://${kc_host}/realms/mayabanque/protocol/openid-connect/token" \
+    -H 'Content-Type: application/x-www-form-urlencoded' \
+    -d 'client_id=mayabanque-cli' \
+    -d 'grant_type=password' \
+    -d 'username=alice' \
+    --data-urlencode "password=${alice_password}" \
+    | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')"
+  [[ -n "$alice_token" ]] && token_ok="true"
+  unset alice_password alice_token kc_admin_password auditor_password
+  [[ "$token_ok" == "true" ]] || { echo "Keycloak demo credential smoke test failed"; return 1; }
+}
+
 echo "==> 1. Point Argo CD to the V6 branch"
 oc apply -f "$ROOT/gitops/argocd/project.yaml" >/dev/null
 oc apply -f "$ROOT/gitops/argocd/application.yaml" >/dev/null
@@ -122,5 +185,9 @@ done
   echo "obsolete mock-sct-inst PDB is still present"
   exit 1
 }
+
+echo "==> 5. Restore ephemeral Keycloak demo credentials"
+configure_keycloak_demo_users
+echo "Keycloak demo credentials are ready (values not printed)"
 
 echo "V6 bootstrap OK: Argo CD reconciles five truly stateless workloads at two replicas with PDB minAvailable=1; mock-sct-inst remains a documented stateful SPOF."
