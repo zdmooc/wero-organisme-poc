@@ -101,9 +101,10 @@
 - [x] passer `mock-sct-inst` à 2 replicas + PDB `minAvailable=1`
 - [x] validation failover inter-pods SCT Inst (`V6 OK (phase B4)`: POST sur pod A, suppression pod A, GET/reconcile sur pod B, même `settlementId`, 1 rail row, 1 ledger settlement)
 - [x] test panne Wero/EPI avant rail + `UNKNOWN` + anti-blind-replay ajouté
-- [ ] validation runtime Wero/EPI outage (`V6 OK (phase B5)`)
-- [ ] définir la politique de récupération contrôlée d’un `UNKNOWN` pré-rail
-- [ ] tests retry/idempotence sous panne
+- [x] validation runtime Wero/EPI outage (`V6 OK (phase B5)`: `UNKNOWN`, rail=0, ledger=0, anti-blind-replay, Wero recovery 11 s, reconcile `NOT_FOUND -> UNKNOWN`, V4/V5 OK)
+- [x] définir la politique de récupération contrôlée d’un `UNKNOWN` pré-rail : confirmation explicite + preflight rail `NOT_FOUND` + claim local exclusif avant resoumission
+- [ ] implémenter et valider la récupération contrôlée (`V6 OK (phase B6)`)
+- [ ] tests retry/idempotence concurrente sous panne
 - [ ] modes dégradés
 
 ### Phase C — cible HA production
