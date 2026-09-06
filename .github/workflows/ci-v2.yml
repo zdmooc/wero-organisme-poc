@@ -77,7 +77,7 @@ jobs:
         run: |
           if [[ -f gitops/base/resilience.yaml ]]; then
             PDB_COUNT="$(grep -c '^kind: PodDisruptionBudget$' /tmp/wero-rendered.yaml)"
-            [[ "$PDB_COUNT" -eq 6 ]] || { echo "Expected 6 PDBs, got $PDB_COUNT"; exit 1; }
+            [[ "$PDB_COUNT" -eq 5 ]] || { echo "Expected 5 PDBs for truly stateless workloads, got $PDB_COUNT"; exit 1; }
             grep -q 'minAvailable: 1' /tmp/wero-rendered.yaml
           fi
 
