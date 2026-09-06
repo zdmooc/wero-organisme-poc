@@ -24,6 +24,83 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 1
+
+  # V6 N+1 workloads must be scraped per pod. Scraping the load-balanced
+  # ClusterIP Service as a single Prometheus target can stick to one replica and
+  # miss process-local counters emitted by another replica.
+  - target:
+      version: v1
+      kind: ConfigMap
+      name: prometheus-config
+    patch: |-
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: prometheus-config
+      data:
+        prometheus.yml: |
+          global:
+            scrape_interval: 5s
+            evaluation_interval: 5s
+          scrape_configs:
+            - job_name: api-gateway
+              metrics_path: /q/metrics
+              dns_sd_configs:
+                - names: ['api-gateway-metrics.wero-poc.svc.cluster.local']
+                  type: A
+                  port: 8080
+                  refresh_interval: 5s
+            - job_name: payment-service
+              metrics_path: /q/metrics
+              dns_sd_configs:
+                - names: ['payment-service-metrics.wero-poc.svc.cluster.local']
+                  type: A
+                  port: 8080
+                  refresh_interval: 5s
+            - job_name: consumer-psp
+              metrics_path: /q/metrics
+              dns_sd_configs:
+                - names: ['consumer-psp-metrics.wero-poc.svc.cluster.local']
+                  type: A
+                  port: 8080
+                  refresh_interval: 5s
+            - job_name: event-audit-service
+              metrics_path: /q/metrics
+              dns_sd_configs:
+                - names: ['event-audit-service-metrics.wero-poc.svc.cluster.local']
+                  type: A
+                  port: 8080
+                  refresh_interval: 5s
+            - job_name: mock-wero
+              metrics_path: /q/metrics
+              dns_sd_configs:
+                - names: ['mock-wero-metrics.wero-poc.svc.cluster.local']
+                  type: A
+                  port: 8080
+                  refresh_interval: 5s
+            - job_name: mock-sct-inst
+              metrics_path: /q/metrics
+              dns_sd_configs:
+                - names: ['mock-sct-inst-metrics.wero-poc.svc.cluster.local']
+                  type: A
+                  port: 8080
+                  refresh_interval: 5s
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: prometheus
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: prometheus
+      spec:
+        template:
+          metadata:
+            annotations:
+              metrics.mayabanque.io/discovery: v6-pod-dns-v1
+
   - target:
       group: route.openshift.io
       version: v1
