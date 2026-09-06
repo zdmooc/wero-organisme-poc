@@ -69,24 +69,39 @@
 - [x] secrets exclus du desired state Git
 - [x] test de drift automatique ajouté
 - [x] CI de rendu Kustomize ajoutée
-- [ ] validation runtime CRC V5
+- [x] validation runtime CRC V5 (`V4 OK` + `V5 OK`)
 - [ ] promotion par image immutable/digest
 - [ ] overlays preprod/prod lorsque ces environnements existeront
 - [ ] progressive delivery dans une itération dédiée
 
 ## V6 — SPOF / Résilience
-- [ ] catalogue SPOF
-- [ ] kill pod
-- [ ] timeout EPI/Wero
-- [ ] panne DB
-- [ ] panne Kafka
-- [ ] panne Keycloak
-- [ ] panne API Gateway
+### Phase A — pod HA sur CRC
+- [x] catalogue SPOF initial
+- [x] 2 replicas pour les 6 composants Java stateless
+- [x] PDB `minAvailable=1` pour les 6 composants stateless
+- [x] bootstrap GitOps V6
+- [x] test kill-pod + mesure du temps de récupération ajouté
+- [x] régression V5 paramétrable avec `api-gateway replicas=2`
+- [ ] validation runtime CRC phase A (`V6 OK (phase A)`)
+
+### Phase B — stateful / dépendances
+- [ ] panne PostgreSQL + persistance PVC + mesure RTO/RPO observé
+- [ ] panne Kafka + backlog outbox + drain après reprise
+- [ ] panne Keycloak + comportement JWT existant / nouveau token
+- [ ] timeout Wero/EPI + état `UNKNOWN`
+- [ ] panne SCT Inst + réconciliation
 - [ ] tests retry/idempotence sous panne
 - [ ] modes dégradés
-- [ ] scénarios de reprise
-- [ ] RTO/RPO
-- [ ] patterns HA
+
+### Phase C — cible HA production
+- [ ] anti-affinity/topology spread multi-node
+- [ ] HA PostgreSQL
+- [ ] Kafka/Redpanda multi-broker
+- [ ] Keycloak clusterisé + DB HA
+- [ ] HA ingress/LB/DNS
+- [ ] RTO/RPO cibles métier
+- [ ] multi-site / PRA
+- [ ] runbooks de reprise
 
 ## V7 — Sandbox externe
 - [ ] connecter un adaptateur externe de test si les prérequis sont disponibles
