@@ -108,4 +108,7 @@ B6 introduit une récupération explicite de ce cas pré-rail : confirmation op�
 
 PostgreSQL, Kafka/Redpanda et Keycloak restent des dépendances mono-instance dans ce lab. CRC étant mono-nœud, ces validations couvrent des pannes de pod/processus et des indisponibilités contrôlées, pas une panne de nœud, zone ou site.
 
-Voir `docs/architecture/08-spof-chaos-ha-v6.md`.
+Voir :
+- `docs/architecture/08-spof-chaos-ha-v6.md`
+- `docs/architecture/09-sct-inst-shared-state-v6-b4.md`
+- `docs/architecture/10-wero-outage-controlled-recovery-v6-b5-b6.md`
