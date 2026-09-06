@@ -5,11 +5,45 @@ PROJECT="wero-poc"
 GITOPS_NS="openshift-gitops"
 APP="wero-poc-crc"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-CHAOS_POLICY="v6-chaos-deny-keycloak"
+SELF_HEAL_SUSPENDED=false
+
+set_self_heal() {
+  local value="$1"
+  oc patch application "$APP" -n "$GITOPS_NS" --type=merge \
+    -p "{\"spec\":{\"syncPolicy\":{\"automated\":{\"selfHeal\":${value}}}}}" >/dev/null
+}
+
+configure_demo_users() {
+  local kc_admin_user kc_admin_password alice_password auditor_password keycloak_pod
+
+  oc rollout status deployment/keycloak -n "$PROJECT" --timeout=420s >/dev/null
+  keycloak_pod="$(oc get pods -n "$PROJECT" -l app=keycloak --field-selector=status.phase=Running \
+    --sort-by=.metadata.creationTimestamp -o name | tail -1 | cut -d/ -f2)"
+  [[ -n "$keycloak_pod" ]] || return 1
+
+  kc_admin_user="$(oc get secret keycloak-admin -n "$PROJECT" -o jsonpath='{.data.username}' | base64 -d)"
+  kc_admin_password="$(oc get secret keycloak-admin -n "$PROJECT" -o jsonpath='{.data.password}' | base64 -d)"
+  alice_password="$(oc get secret wero-v3-demo-users -n "$PROJECT" -o jsonpath='{.data.ALICE_PASSWORD}' | base64 -d)"
+  auditor_password="$(oc get secret wero-v3-demo-users -n "$PROJECT" -o jsonpath='{.data.AUDITOR_PASSWORD}' | base64 -d)"
+
+  MSYS_NO_PATHCONV=1 oc exec -n "$PROJECT" "$keycloak_pod" -- /opt/keycloak/bin/kcadm.sh config credentials \
+    --server http://127.0.0.1:8080 --realm master --user "$kc_admin_user" --password "$kc_admin_password" >/dev/null
+  MSYS_NO_PATHCONV=1 oc exec -n "$PROJECT" "$keycloak_pod" -- /opt/keycloak/bin/kcadm.sh set-password \
+    -r mayabanque --username alice --new-password "$alice_password" >/dev/null
+  MSYS_NO_PATHCONV=1 oc exec -n "$PROJECT" "$keycloak_pod" -- /opt/keycloak/bin/kcadm.sh set-password \
+    -r mayabanque --username auditor --new-password "$auditor_password" >/dev/null
+
+  unset kc_admin_password alice_password auditor_password
+}
 
 cleanup() {
   set +e
-  oc delete networkpolicy "$CHAOS_POLICY" -n "$PROJECT" --ignore-not-found >/dev/null 2>&1 || true
+  oc scale deployment/keycloak -n "$PROJECT" --replicas=1 >/dev/null 2>&1 || true
+  if [[ "$SELF_HEAL_SUSPENDED" == "true" ]]; then
+    set_self_heal true >/dev/null 2>&1 || true
+  fi
+  oc rollout status deployment/keycloak -n "$PROJECT" --timeout=420s >/dev/null 2>&1 || true
+  configure_demo_users >/dev/null 2>&1 || true
   unset ALICE_TOKEN AUDITOR_TOKEN SCA_CODE
 }
 trap cleanup EXIT
@@ -75,11 +109,9 @@ refresh_demo_tokens() {
 }
 
 echo "==> 1. Recover any stale Keycloak chaos and wait for a healthy V6 baseline"
-# A previously interrupted B3 run may have left Keycloak probes recovering or,
-# in the worst case, the temporary deny policy behind. Remove only the known
-# B3 chaos object, then wait for Keycloak and Argo CD to converge before testing.
-oc delete networkpolicy "$CHAOS_POLICY" -n "$PROJECT" --ignore-not-found >/dev/null 2>&1 || true
-oc rollout status deployment/keycloak -n "$PROJECT" --timeout=240s >/dev/null
+set_self_heal true
+oc scale deployment/keycloak -n "$PROJECT" --replicas=1 >/dev/null
+oc rollout status deployment/keycloak -n "$PROJECT" --timeout=420s >/dev/null
 
 BASELINE_READY=false
 for _ in $(seq 1 60); do
@@ -93,9 +125,6 @@ for _ in $(seq 1 60); do
 done
 [[ "$BASELINE_READY" == "true" ]] || {
   echo "Argo CD did not return to Synced/Healthy before Keycloak chaos (sync=${SYNC:-<none>} health=${HEALTH:-<none>})"
-  oc get application "$APP" -n "$GITOPS_NS"
-  oc get deployment keycloak -n "$PROJECT"
-  oc get pods -n "$PROJECT" -l app=keycloak -o wide
   exit 1
 }
 echo "sync=Synced health=Healthy"
@@ -106,7 +135,7 @@ echo "sync=Synced health=Healthy"
 }
 EXPECTED_GATEWAY_REPLICAS=2 "$ROOT/tests/e2e/test-v5-gitops.sh"
 
-echo "==> 2. Acquire a fresh short-lived JWT and select committed business state"
+echo "==> 2. Acquire a fresh short-lived JWT and warm OIDC/JWK caches"
 refresh_demo_tokens
 GATEWAY_HOST="$(oc get route api-gateway -n "$PROJECT" -o jsonpath='{.spec.host}')"
 EXISTING_PAYMENT_ID="$(pg_scalar "select payment_id from payments where status='SETTLED' order by created_at desc limit 1;")"
@@ -118,30 +147,26 @@ PRE_CODE="$(curl -sS -o /tmp/v6-keycloak-pre.json -w '%{http_code}' \
   -H 'X-Correlation-Id: V6-KEYCLOAK-PRE')"
 [[ "$PRE_CODE" == "200" ]] || { echo "Pre-chaos authenticated read failed HTTP $PRE_CODE"; exit 1; }
 
-echo "==> 3. Isolate Keycloak ingress deterministically"
-cat <<'EOF' | oc apply -n "$PROJECT" -f - >/dev/null
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: v6-chaos-deny-keycloak
-  labels:
-    chaos.mayabanque.io/scenario: keycloak-outage
-spec:
-  podSelector:
-    matchLabels:
-      app: keycloak
-  policyTypes:
-    - Ingress
-  ingress: []
-EOF
+echo "==> 3. Stop the single Keycloak replica while temporarily suspending Argo self-heal"
+# On single-node CRC the OpenShift router may use node/host networking, so a
+# pod-ingress NetworkPolicy is not a reliable way to make the external Route
+# unavailable. Suspend self-heal only for this controlled chaos window and
+# scale the single Keycloak replica to zero to create a deterministic IAM outage.
+set_self_heal false
+SELF_HEAL_SUSPENDED=true
+oc scale deployment/keycloak -n "$PROJECT" --replicas=0 >/dev/null
 
-# Do not restart Keycloak while this deny-all ingress policy is active. On CRC,
-# kubelet HTTP readiness/liveness probes also traverse pod ingress and can be
-# blocked by the policy, which would make a rollout wait measure probe isolation
-# rather than IAM behavior. The network partition itself is the deterministic
-# failure injected in B3.
-sleep 3
-oc get networkpolicy "$CHAOS_POLICY" -n "$PROJECT" >/dev/null
+STOPPED=false
+for _ in $(seq 1 30); do
+  READY="$(oc get deployment keycloak -n "$PROJECT" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)"
+  PODS="$(oc get pods -n "$PROJECT" -l app=keycloak --no-headers 2>/dev/null | wc -l | tr -d ' ')"
+  if [[ "${READY:-0}" == "0" && "$PODS" == "0" ]]; then
+    STOPPED=true
+    break
+  fi
+  sleep 2
+done
+[[ "$STOPPED" == "true" ]] || { echo "Keycloak did not stop deterministically"; exit 1; }
 
 echo "==> 4. Existing JWT remains usable while fresh token acquisition is unavailable"
 EXISTING_CODE="$(curl -sS --connect-timeout 2 --max-time 8 -o /tmp/v6-keycloak-existing.json -w '%{http_code}' \
@@ -159,14 +184,16 @@ grep -q '"status":"SETTLED"' /tmp/v6-keycloak-existing.json || {
 
 OUTAGE_TOKEN="$(issue_alice_token)"
 [[ -z "$OUTAGE_TOKEN" ]] || {
-  echo "Fresh Alice token unexpectedly succeeded while Keycloak ingress was denied"
+  echo "Fresh Alice token unexpectedly succeeded while Keycloak had zero replicas"
   exit 1
 }
 echo "existing JWT accepted; fresh token acquisition unavailable as expected"
 
-echo "==> 5. Restore Keycloak connectivity and measure fresh-token recovery"
+echo "==> 5. Restore Keycloak and measure fresh-token recovery"
 RECOVERY_START="$(date +%s)"
-oc delete networkpolicy "$CHAOS_POLICY" -n "$PROJECT" --ignore-not-found >/dev/null
+oc scale deployment/keycloak -n "$PROJECT" --replicas=1 >/dev/null
+oc rollout status deployment/keycloak -n "$PROJECT" --timeout=420s >/dev/null
+configure_demo_users
 
 TOKEN_RECOVERED=false
 FRESH_TOKEN=""
@@ -179,19 +206,31 @@ for _ in $(seq 1 60); do
   sleep 2
 done
 [[ "$TOKEN_RECOVERED" == "true" ]] || {
-  echo "Fresh token acquisition did not recover after Keycloak connectivity returned"
+  echo "Fresh token acquisition did not recover after Keycloak returned"
   exit 1
 }
 AUTH_RTO="$(( $(date +%s) - RECOVERY_START ))"
 unset FRESH_TOKEN OUTAGE_TOKEN
 
-# The deny-all ingress policy may transiently make HTTP probes fail. Wait until
-# the deployment is healthy again before running the full regression.
-oc rollout status deployment/keycloak -n "$PROJECT" --timeout=240s >/dev/null
+set_self_heal true
+SELF_HEAL_SUSPENDED=false
+oc annotate application "$APP" -n "$GITOPS_NS" argocd.argoproj.io/refresh=hard --overwrite >/dev/null
+
+ARGO_READY=false
+for _ in $(seq 1 60); do
+  SYNC="$(oc get application "$APP" -n "$GITOPS_NS" -o jsonpath='{.status.sync.status}' 2>/dev/null || true)"
+  HEALTH="$(oc get application "$APP" -n "$GITOPS_NS" -o jsonpath='{.status.health.status}' 2>/dev/null || true)"
+  if [[ "$SYNC" == "Synced" && "$HEALTH" == "Healthy" ]]; then
+    ARGO_READY=true
+    break
+  fi
+  sleep 5
+done
+[[ "$ARGO_READY" == "true" ]] || { echo "Argo CD did not return to Synced/Healthy after Keycloak recovery"; exit 1; }
 
 echo "fresh token acquisition recovered in ${AUTH_RTO}s"
 
 echo "==> 6. Full V5 business/observability regression after Keycloak recovery"
 EXPECTED_GATEWAY_REPLICAS=2 "$ROOT/tests/e2e/test-v5-gitops.sh"
 
-echo "V6 OK (phase B3): an already-issued JWT remained usable during a deterministic Keycloak ingress outage, fresh token acquisition failed while IAM was unavailable, token issuance recovered in ${AUTH_RTO}s after connectivity returned, and the full V5 regression passed afterward. This validates CRC degraded-mode behavior with cached JWT verification; it does not make the single-instance Keycloak deployment HA."
+echo "V6 OK (phase B3): an already-issued JWT remained usable while the single Keycloak replica was stopped, fresh token acquisition failed during the IAM outage, token issuance recovered in ${AUTH_RTO}s after Keycloak restarted, Argo CD returned to Synced/Healthy, and the full V5 regression passed afterward. This validates a time-bounded CRC degraded mode with cached JWT verification; it does not make the single-instance Keycloak deployment HA."
