@@ -101,6 +101,66 @@ patches:
             annotations:
               metrics.mayabanque.io/discovery: v6-pod-dns-v1
 
+  # Keycloak start-dev uses ephemeral lab state on CRC and can generate a new
+  # signing key after restart. Quarkus otherwise throttles forced JWK refreshes
+  # for 10 minutes after a failed/unknown-kid refresh attempt. Keep the shorter
+  # retry interval local to the CRC resilience lab so every N+1 resource-server
+  # replica can converge quickly after the IAM pod comes back.
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: api-gateway
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: api-gateway
+      spec:
+        template:
+          spec:
+            containers:
+              - name: api-gateway
+                env:
+                  - name: QUARKUS_OIDC_TOKEN_FORCED_JWK_REFRESH_INTERVAL
+                    value: 5S
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: payment-service
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: payment-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: payment-service
+                env:
+                  - name: QUARKUS_OIDC_TOKEN_FORCED_JWK_REFRESH_INTERVAL
+                    value: 5S
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: event-audit-service
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: event-audit-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: event-audit-service
+                env:
+                  - name: QUARKUS_OIDC_TOKEN_FORCED_JWK_REFRESH_INTERVAL
+                    value: 5S
+
   - target:
       group: route.openshift.io
       version: v1
