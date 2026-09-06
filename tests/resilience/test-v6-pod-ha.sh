@@ -3,8 +3,8 @@ set -euo pipefail
 
 PROJECT="wero-poc"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-STATELESS=(api-gateway payment-service consumer-psp event-audit-service mock-wero mock-sct-inst)
-STATEFUL_SPOF=(postgresql kafka keycloak)
+STATELESS=(api-gateway payment-service consumer-psp event-audit-service mock-wero)
+STATEFUL_SPOF=(postgresql kafka keycloak mock-sct-inst)
 
 echo "==> 1. V5 regression on the V6 desired state"
 EXPECTED_GATEWAY_REPLICAS=2 "$ROOT/tests/e2e/test-v5-gitops.sh"
@@ -20,7 +20,12 @@ for d in "${STATELESS[@]}"; do
   [[ "$MIN_AVAILABLE" == "1" ]] || { echo "$d PDB expected minAvailable=1, got $MIN_AVAILABLE"; exit 1; }
 done
 
-echo "==> 3. Kill one pod per stateless component and measure recovery"
+[[ "$(oc get deployment mock-sct-inst -n "$PROJECT" -o jsonpath='{.spec.replicas}')" == "1" ]] || {
+  echo "mock-sct-inst must remain a single-replica stateful SPOF until settlement state is externalized"
+  exit 1
+}
+
+echo "==> 3. Kill one pod per truly stateless component and measure recovery"
 for d in "${STATELESS[@]}"; do
   POD="$(oc get pods -n "$PROJECT" -l "app=${d}" --field-selector=status.phase=Running \
     -o jsonpath='{.items[0].metadata.name}')"
@@ -63,4 +68,4 @@ done
 echo "==> 5. Full business/observability regression after chaos"
 EXPECTED_GATEWAY_REPLICAS=2 "$ROOT/tests/e2e/test-v5-gitops.sh"
 
-echo "V6 OK (phase A): six stateless components survived one-pod loss and recovered to two replicas; V5 business/observability regression still passes. PostgreSQL, Kafka and Keycloak remain explicit single-replica SPOFs for the next V6 phase."
+echo "V6 OK (phase A): five truly stateless components survived one-pod loss and recovered to two replicas; V5 business/observability regression still passes. PostgreSQL, Kafka, Keycloak and the in-memory mock-sct-inst remain explicit single-replica SPOFs for the next V6 phase."
