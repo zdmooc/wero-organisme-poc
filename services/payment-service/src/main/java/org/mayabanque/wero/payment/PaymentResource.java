@@ -20,6 +20,7 @@ import org.jboss.logging.Logger;
 public class PaymentResource {
 
     private static final Logger LOG = Logger.getLogger(PaymentResource.class);
+    private static final String RECOVERY_CONFIRMATION = "RESUBMIT_AFTER_RAIL_NOT_FOUND";
 
     @Inject PaymentRemoteGateway remoteGateway;
     @Inject OutboxService outbox;
@@ -66,17 +67,9 @@ public class PaymentResource {
         DownstreamOutcome outcome;
         try {
             PaymentResponse downstream = remoteGateway.pay(correlationId, request);
-            PaymentStatus status = switch (downstream.status()) {
-                case "SETTLED" -> PaymentStatus.SETTLED;
-                case "FAILED" -> PaymentStatus.FAILED;
-                default -> PaymentStatus.PENDING;
-            };
-            outcome = new DownstreamOutcome(status, downstream.settlementId(), null);
+            outcome = mapDownstream(downstream);
         } catch (Exception e) {
-            outcome = new DownstreamOutcome(
-                    PaymentStatus.UNKNOWN,
-                    null,
-                    truncate(e.getClass().getSimpleName() + ": " + String.valueOf(e.getMessage()), 500));
+            outcome = unknownOutcome(e);
         }
 
         DownstreamOutcome finalOutcome = outcome;
@@ -90,8 +83,7 @@ public class PaymentResource {
         LOG.infof("correlationId=%s paymentId=%s status=%s settlementId=%s",
                 correlationId, result.paymentId(), result.status(), result.settlementId());
 
-        int httpStatus = finalStatus == PaymentStatus.UNKNOWN || finalStatus == PaymentStatus.PENDING ? 202 : 200;
-        return Response.status(httpStatus).entity(result).build();
+        return Response.status(httpStatus(finalStatus)).entity(result).build();
     }
 
     private PrepareResult preparePayment(
@@ -232,6 +224,100 @@ public class PaymentResource {
         return Response.ok(result).build();
     }
 
+    /**
+     * Explicit operator-controlled recovery for a pre-rail UNKNOWN.
+     *
+     * This endpoint never retries automatically. The caller must provide an
+     * explicit confirmation, the local payment must still be UNKNOWN, and a
+     * fresh SCT Inst status preflight must return NOT_FOUND. A conditional
+     * database update then claims the recovery so only one N+1 Payment Service
+     * replica is allowed to resubmit the stored payment intent.
+     */
+    @POST
+    @Path("/{paymentId}/recover")
+    @RolesAllowed("payment-reconcile")
+    public Response recover(@HeaderParam("X-Correlation-Id") String correlationId,
+                            @PathParam("paymentId") String paymentId,
+                            RecoveryRequest request) {
+        if (request == null || !RECOVERY_CONFIRMATION.equals(request.confirmation())) {
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity(new ErrorResponse("RECOVERY_CONFIRMATION_REQUIRED",
+                            "confirmation must be " + RECOVERY_CONFIRMATION)).build();
+        }
+
+        Span.current().setAttribute("wero.payment_id", paymentId);
+        if (!blank(correlationId)) Span.current().setAttribute("wero.correlation_id", correlationId);
+
+        RecoverySnapshot initial = QuarkusTransaction.requiringNew().call(() -> loadRecoverySnapshot(paymentId));
+        if (initial == null) {
+            return Response.status(Response.Status.NOT_FOUND).entity(new ErrorResponse("PAYMENT_NOT_FOUND", paymentId)).build();
+        }
+        if (PaymentStatus.SETTLED.name().equals(initial.status()) || PaymentStatus.FAILED.name().equals(initial.status())) {
+            return Response.ok(new RecoveryResponse(paymentId, initial.status(), "SKIPPED", "ALREADY_FINAL",
+                    initial.status(), initial.settlementId())).build();
+        }
+        if (PaymentStatus.RECOVERY_PENDING.name().equals(initial.status())) {
+            return Response.status(202).entity(new RecoveryResponse(paymentId, initial.status(), "SKIPPED",
+                    "RECOVERY_ALREADY_IN_PROGRESS", initial.status(), initial.settlementId())).build();
+        }
+        if (!PaymentStatus.UNKNOWN.name().equals(initial.status())) {
+            return Response.status(Response.Status.CONFLICT)
+                    .entity(new ErrorResponse("RECOVERY_NOT_ALLOWED", "Only UNKNOWN payments can be explicitly recovered")).build();
+        }
+
+        SctInstStatusClient.RailStatus rail;
+        try {
+            rail = remoteGateway.railStatus(correlationId, paymentId);
+        } catch (Exception e) {
+            return Response.status(202).entity(new RecoveryResponse(paymentId, initial.status(), "UNAVAILABLE",
+                    "WAIT_FOR_RAIL_STATUS", initial.status(), initial.settlementId())).build();
+        }
+
+        if ("SETTLED".equals(rail.status()) || "FAILED".equals(rail.status())) {
+            ReconciliationResponse reconciled = QuarkusTransaction.requiringNew().call(
+                    () -> applyReconciliation(correlationId, paymentId, rail));
+            return Response.ok(new RecoveryResponse(paymentId, initial.status(), rail.status(),
+                    "RECONCILED_WITHOUT_RESUBMIT", reconciled.afterStatus(), reconciled.settlementId())).build();
+        }
+        if (!"NOT_FOUND".equals(rail.status())) {
+            return Response.status(202).entity(new RecoveryResponse(paymentId, initial.status(), rail.status(),
+                    "WAIT_FOR_FINAL_RAIL_STATE", initial.status(), initial.settlementId())).build();
+        }
+
+        RecoveryClaim claim = QuarkusTransaction.requiringNew().call(
+                () -> claimRecovery(paymentId, correlationId));
+        if (!claim.claimed()) {
+            RecoverySnapshot current = QuarkusTransaction.requiringNew().call(() -> loadRecoverySnapshot(paymentId));
+            String currentStatus = current == null ? "MISSING" : current.status();
+            String settlementId = current == null ? null : current.settlementId();
+            int code = PaymentStatus.SETTLED.name().equals(currentStatus) || PaymentStatus.FAILED.name().equals(currentStatus) ? 200 : 202;
+            return Response.status(code).entity(new RecoveryResponse(paymentId, initial.status(), rail.status(),
+                    "RECOVERY_ALREADY_CLAIMED", currentStatus, settlementId)).build();
+        }
+
+        DownstreamOutcome outcome;
+        try {
+            PaymentResponse downstream = remoteGateway.pay(correlationId, claim.request());
+            outcome = mapDownstream(downstream);
+        } catch (Exception e) {
+            outcome = unknownOutcome(e);
+        }
+
+        DownstreamOutcome finalOutcome = outcome;
+        PaymentResponse result = QuarkusTransaction.requiringNew().call(
+                () -> finalizeRecovery(paymentId, correlationId, finalOutcome));
+        PaymentStatus finalStatus = PaymentStatus.valueOf(result.status());
+        metrics.paymentStatus(finalStatus);
+        Span.current().setAttribute("wero.payment.status", result.status());
+        LOG.infof("correlationId=%s paymentId=%s controlledRecovery railPreflight=%s status=%s settlementId=%s",
+                correlationId, paymentId, rail.status(), result.status(), result.settlementId());
+
+        return Response.status(httpStatus(finalStatus))
+                .entity(new RecoveryResponse(paymentId, initial.status(), rail.status(), "RESUBMITTED",
+                        result.status(), result.settlementId()))
+                .build();
+    }
+
     private ReconcileState loadReconcileState(String paymentId) {
         PaymentEntity payment = PaymentEntity.findById(paymentId);
         if (payment == null) return null;
@@ -276,6 +362,83 @@ public class PaymentResource {
                 payment.settlementId);
     }
 
+    private RecoverySnapshot loadRecoverySnapshot(String paymentId) {
+        PaymentEntity payment = PaymentEntity.findById(paymentId);
+        if (payment == null) return null;
+        return new RecoverySnapshot(payment.status.name(), payment.settlementId, toRequest(payment));
+    }
+
+    private RecoveryClaim claimRecovery(String paymentId, String correlationId) {
+        long claimed = PaymentEntity.update(
+                "status = ?1, updatedAt = ?2 where paymentId = ?3 and status = ?4",
+                PaymentStatus.RECOVERY_PENDING, Instant.now(), paymentId, PaymentStatus.UNKNOWN);
+        if (claimed != 1) return new RecoveryClaim(false, null);
+
+        PaymentEntity payment = PaymentEntity.findById(paymentId);
+        if (payment == null) throw new IllegalStateException("Payment disappeared after recovery claim: " + paymentId);
+        payment.lastError = null;
+        outbox.enqueue(payment, "PAYMENT_RECOVERY_STARTED", correlationId);
+        return new RecoveryClaim(true, toRequest(payment));
+    }
+
+    private PaymentResponse finalizeRecovery(String paymentId, String correlationId, DownstreamOutcome outcome) {
+        PaymentEntity payment = PaymentEntity.findById(paymentId);
+        if (payment == null) throw new IllegalStateException("Payment disappeared during recovery: " + paymentId);
+
+        if (payment.status != PaymentStatus.RECOVERY_PENDING) {
+            return toResponse(payment);
+        }
+
+        payment.status = outcome.status();
+        payment.settlementId = outcome.settlementId();
+        payment.lastError = outcome.lastError();
+        payment.updatedAt = Instant.now();
+
+        switch (payment.status) {
+            case SETTLED -> {
+                recordSettlementLedger(payment);
+                outbox.enqueue(payment, "PAYMENT_RECOVERED", correlationId);
+                outbox.enqueue(payment, "PAYMENT_SETTLED", correlationId);
+            }
+            case FAILED -> {
+                outbox.enqueue(payment, "PAYMENT_RECOVERED", correlationId);
+                outbox.enqueue(payment, "PAYMENT_FAILED", correlationId);
+            }
+            case PENDING -> {
+                outbox.enqueue(payment, "PAYMENT_RECOVERED", correlationId);
+                outbox.enqueue(payment, "PAYMENT_PENDING", correlationId);
+            }
+            case UNKNOWN -> outbox.enqueue(payment, "PAYMENT_RECOVERY_FAILED", correlationId);
+            default -> { }
+        }
+        return toResponse(payment);
+    }
+
+    private static DownstreamOutcome mapDownstream(PaymentResponse downstream) {
+        PaymentStatus status = switch (downstream.status()) {
+            case "SETTLED" -> PaymentStatus.SETTLED;
+            case "FAILED" -> PaymentStatus.FAILED;
+            default -> PaymentStatus.PENDING;
+        };
+        return new DownstreamOutcome(status, downstream.settlementId(), null);
+    }
+
+    private static DownstreamOutcome unknownOutcome(Exception e) {
+        return new DownstreamOutcome(
+                PaymentStatus.UNKNOWN,
+                null,
+                truncate(e.getClass().getSimpleName() + ": " + String.valueOf(e.getMessage()), 500));
+    }
+
+    private static int httpStatus(PaymentStatus status) {
+        return status == PaymentStatus.UNKNOWN || status == PaymentStatus.PENDING || status == PaymentStatus.RECOVERY_PENDING ? 202 : 200;
+    }
+
+    private static PaymentRequest toRequest(PaymentEntity payment) {
+        return new PaymentRequest(payment.paymentId, payment.amountCents, payment.currency,
+                payment.debtorAlias, payment.creditorAlias, payment.simulateMode);
+    }
+
     private static void recordSettlementLedger(PaymentEntity payment) {
         long existing = LedgerEntryEntity.count("paymentId = ?1 and entryType = ?2", payment.paymentId, "SETTLEMENT");
         if (existing > 0) return;
@@ -306,6 +469,8 @@ public class PaymentResource {
     private record PrepareResult(Response earlyResponse) {}
     private record DownstreamOutcome(PaymentStatus status, String settlementId, String lastError) {}
     private record ReconcileState(String status, String settlementId) {}
+    private record RecoverySnapshot(String status, String settlementId, PaymentRequest request) {}
+    private record RecoveryClaim(boolean claimed, PaymentRequest request) {}
 
     public record PaymentRequest(String paymentId, long amountCents, String currency, String debtorAlias, String creditorAlias, String simulateMode) {}
     public record PaymentResponse(String paymentId, String status, String settlementId) {}
@@ -314,5 +479,8 @@ public class PaymentResource {
                                  Instant createdAt, Instant updatedAt) {}
     public record LedgerEntryView(Long id, String paymentId, String entryType, long amountCents, String currency, String settlementId, Instant createdAt) {}
     public record ReconciliationResponse(String paymentId, String beforeStatus, String railStatus, String afterStatus, String settlementId) {}
+    public record RecoveryRequest(String confirmation) {}
+    public record RecoveryResponse(String paymentId, String beforeStatus, String railStatusBefore, String action,
+                                   String afterStatus, String settlementId) {}
     public record ErrorResponse(String code, String message) {}
 }

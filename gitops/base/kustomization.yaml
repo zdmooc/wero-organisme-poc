@@ -5,7 +5,9 @@ resources:
   - infrastructure.yaml
   - runtime.yaml
   - observability.yaml
+  - metrics-discovery.yaml
   - networking-routes.yaml
+  - resilience.yaml
 
 configMapGenerator:
   - name: keycloak-realm

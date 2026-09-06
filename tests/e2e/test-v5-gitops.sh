@@ -5,6 +5,8 @@ PROJECT=wero-poc
 GITOPS_NS=openshift-gitops
 APP=wero-poc-crc
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+EXPECTED_GATEWAY_REPLICAS="${EXPECTED_GATEWAY_REPLICAS:-1}"
+DRIFT_GATEWAY_REPLICAS="$((EXPECTED_GATEWAY_REPLICAS + 1))"
 
 service_backend_addresses() {
   local service_name="$1"
@@ -98,31 +100,33 @@ done
 
 echo "==> 6. Drift detection + automatic self-heal"
 ORIGINAL="$(oc get deployment api-gateway -n "$PROJECT" -o jsonpath='{.spec.replicas}')"
-[[ "$ORIGINAL" == "1" ]] || { echo "Expected api-gateway replicas=1, got $ORIGINAL"; exit 1; }
-oc patch deployment api-gateway -n "$PROJECT" --type=merge -p '{"spec":{"replicas":2}}' >/dev/null
-[[ "$(oc get deployment api-gateway -n "$PROJECT" -o jsonpath='{.spec.replicas}')" == "2" ]]
+[[ "$ORIGINAL" == "$EXPECTED_GATEWAY_REPLICAS" ]] || {
+  echo "Expected api-gateway replicas=${EXPECTED_GATEWAY_REPLICAS}, got $ORIGINAL"
+  exit 1
+}
+oc patch deployment api-gateway -n "$PROJECT" --type=merge \
+  -p "{\"spec\":{\"replicas\":${DRIFT_GATEWAY_REPLICAS}}}" >/dev/null
+[[ "$(oc get deployment api-gateway -n "$PROJECT" -o jsonpath='{.spec.replicas}')" == "$DRIFT_GATEWAY_REPLICAS" ]]
 oc annotate application "$APP" -n "$GITOPS_NS" argocd.argoproj.io/refresh=hard --overwrite >/dev/null
 
 HEALED=false
 for _ in $(seq 1 36); do
   REPLICAS="$(oc get deployment api-gateway -n "$PROJECT" -o jsonpath='{.spec.replicas}')"
   SYNC="$(oc get application "$APP" -n "$GITOPS_NS" -o jsonpath='{.status.sync.status}' 2>/dev/null || true)"
-  if [[ "$REPLICAS" == "1" && "$SYNC" == "Synced" ]]; then
+  if [[ "$REPLICAS" == "$EXPECTED_GATEWAY_REPLICAS" && "$SYNC" == "Synced" ]]; then
     HEALED=true
     break
   fi
   sleep 5
 done
 [[ "$HEALED" == "true" ]] || {
-  echo "Argo CD did not self-heal api-gateway replicas back to 1"
+  echo "Argo CD did not self-heal api-gateway replicas back to ${EXPECTED_GATEWAY_REPLICAS}"
   oc get application "$APP" -n "$GITOPS_NS"
   oc get deployment api-gateway -n "$PROJECT"
   exit 1
 }
-echo "api-gateway drift healed back to replicas=1"
+echo "api-gateway drift healed back to replicas=${EXPECTED_GATEWAY_REPLICAS}"
 
-# Synced/Healthy proves desired-state convergence. Before the V4 HTTP
-# regression, also prove the healed gateway is actually routable.
 echo "==> 6b. Gateway dataplane is ready after self-heal"
 oc rollout status deployment/api-gateway -n "$PROJECT" --timeout=180s >/dev/null
 SERVICE_APP_SELECTOR="$(oc get service api-gateway -n "$PROJECT" -o jsonpath='{.spec.selector.app}' 2>/dev/null || true)"

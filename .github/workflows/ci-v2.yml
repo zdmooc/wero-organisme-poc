@@ -1,4 +1,4 @@
-name: V2/V2B/V3/V3B/V4/V5 checks
+name: V2/V2B/V3/V3B/V4/V5/V6 checks
 
 on:
   push:
@@ -9,6 +9,7 @@ on:
       - v3b-api-gateway-zero-trust
       - v4-observability-e2e
       - v5-gitops-argocd
+      - v6-spof-chaos-ha-resilience
   pull_request:
     branches:
       - v1-single-immediate
@@ -18,6 +19,7 @@ on:
       - v3b-api-gateway-zero-trust
       - v4-observability-e2e
       - v5-gitops-argocd
+      - v6-spof-chaos-ha-resilience
 
 jobs:
   compile:
@@ -63,17 +65,26 @@ jobs:
 
       - name: Render CRC desired state
         run: |
-          /tmp/kustomize build gitops/overlays/crc > /tmp/wero-v5-rendered.yaml
-          grep -q 'name: api-gateway' /tmp/wero-v5-rendered.yaml
-          grep -q 'name: payment-service' /tmp/wero-v5-rendered.yaml
-          grep -q 'name: keycloak' /tmp/wero-v5-rendered.yaml
-          grep -q 'name: jaeger' /tmp/wero-v5-rendered.yaml
-          grep -q 'name: prometheus' /tmp/wero-v5-rendered.yaml
-          grep -q 'name: grafana' /tmp/wero-v5-rendered.yaml
+          /tmp/kustomize build gitops/overlays/crc > /tmp/wero-rendered.yaml
+          grep -q 'name: api-gateway' /tmp/wero-rendered.yaml
+          grep -q 'name: payment-service' /tmp/wero-rendered.yaml
+          grep -q 'name: keycloak' /tmp/wero-rendered.yaml
+          grep -q 'name: jaeger' /tmp/wero-rendered.yaml
+          grep -q 'name: prometheus' /tmp/wero-rendered.yaml
+          grep -q 'name: grafana' /tmp/wero-rendered.yaml
+
+      - name: Verify V6 resilience resources when present
+        run: |
+          if [[ -f gitops/base/resilience.yaml ]]; then
+            PDB_COUNT="$(grep -c '^kind: PodDisruptionBudget$' /tmp/wero-rendered.yaml)"
+            [[ "$PDB_COUNT" -eq 6 ]] || { echo "Expected 6 PDBs for V6 N+1 workloads, got $PDB_COUNT"; exit 1; }
+            grep -q 'minAvailable: 1' /tmp/wero-rendered.yaml
+            awk '/name: mock-sct-inst/{seen=1} seen && /replicas: 2/{found=1; exit} END{exit !found}' /tmp/wero-rendered.yaml
+          fi
 
       - name: Verify runtime Secrets are not part of rendered desired state
         run: |
-          if grep -E '^[[:space:]]*kind:[[:space:]]*Secret[[:space:]]*$' /tmp/wero-v5-rendered.yaml; then
+          if grep -E '^[[:space:]]*kind:[[:space:]]*Secret[[:space:]]*$' /tmp/wero-rendered.yaml; then
             echo 'ERROR: Secret manifest found in rendered runtime desired state'
             exit 1
           fi

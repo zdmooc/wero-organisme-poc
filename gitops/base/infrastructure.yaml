@@ -215,19 +215,31 @@ spec:
             limits:
               cpu: "1"
               memory: 1536Mi
+          # Keycloak start-dev performs Quarkus augmentation/import on this CRC
+          # lab and can take well over the original liveness delay. A dedicated
+          # startup probe prevents kubelet from repeatedly killing a healthy but
+          # still-starting process before port 8080 is ready.
+          startupProbe:
+            httpGet:
+              path: /realms/master
+              port: 8080
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 72
           readinessProbe:
             httpGet:
               path: /realms/mayabanque
               port: 8080
-            initialDelaySeconds: 15
             periodSeconds: 5
+            timeoutSeconds: 2
             failureThreshold: 60
           livenessProbe:
             httpGet:
               path: /realms/master
               port: 8080
-            initialDelaySeconds: 45
             periodSeconds: 15
+            timeoutSeconds: 2
+            failureThreshold: 3
           volumeMounts:
             - name: realm-import
               mountPath: /opt/keycloak/data/import
