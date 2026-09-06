@@ -77,8 +77,9 @@ jobs:
         run: |
           if [[ -f gitops/base/resilience.yaml ]]; then
             PDB_COUNT="$(grep -c '^kind: PodDisruptionBudget$' /tmp/wero-rendered.yaml)"
-            [[ "$PDB_COUNT" -eq 5 ]] || { echo "Expected 5 PDBs for truly stateless workloads, got $PDB_COUNT"; exit 1; }
+            [[ "$PDB_COUNT" -eq 6 ]] || { echo "Expected 6 PDBs for V6 N+1 workloads, got $PDB_COUNT"; exit 1; }
             grep -q 'minAvailable: 1' /tmp/wero-rendered.yaml
+            awk '/name: mock-sct-inst/{seen=1} seen && /replicas: 2/{found=1; exit} END{exit !found}' /tmp/wero-rendered.yaml
           fi
 
       - name: Verify runtime Secrets are not part of rendered desired state
