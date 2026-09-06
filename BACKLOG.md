@@ -103,7 +103,8 @@
 - [x] test panne Wero/EPI avant rail + `UNKNOWN` + anti-blind-replay ajouté
 - [x] validation runtime Wero/EPI outage (`V6 OK (phase B5)`: `UNKNOWN`, rail=0, ledger=0, anti-blind-replay, Wero recovery 11 s, reconcile `NOT_FOUND -> UNKNOWN`, V4/V5 OK)
 - [x] définir la politique de récupération contrôlée d’un `UNKNOWN` pré-rail : confirmation explicite + preflight rail `NOT_FOUND` + claim local exclusif avant resoumission
-- [ ] implémenter et valider la récupération contrôlée (`V6 OK (phase B6)`)
+- [x] implémentation récupération contrôlée + état `RECOVERY_PENDING` + endpoint gateway + test B6 ajoutés
+- [ ] validation runtime récupération contrôlée (`V6 OK (phase B6)`)
 - [ ] tests retry/idempotence concurrente sous panne
 - [ ] modes dégradés
 
