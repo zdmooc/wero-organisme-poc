@@ -69,6 +69,14 @@ public interface PaymentBackendClient {
             @HeaderParam("X-Correlation-Id") String correlationId,
             @PathParam("paymentId") String paymentId);
 
+    @POST
+    @Path("/payments/{paymentId}/recover")
+    Response recover(
+            @HeaderParam("Authorization") String authorization,
+            @HeaderParam("X-Correlation-Id") String correlationId,
+            @PathParam("paymentId") String paymentId,
+            String body);
+
     @GET
     @Path("/outbox/{paymentId}")
     Response getOutbox(
