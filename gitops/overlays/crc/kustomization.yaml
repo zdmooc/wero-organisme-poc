@@ -12,19 +12,6 @@ commonAnnotations:
   gitops.mayabanque.io/version: v6
 
 patches:
-  # mock-sct-inst keeps settlement state in process memory. Running two replicas
-  # would make status/reconciliation nondeterministic, so CRC keeps it single
-  # replica until the state is externalized in the stateful-resilience phase.
-  - target:
-      group: apps
-      version: v1
-      kind: Deployment
-      name: mock-sct-inst
-    patch: |-
-      - op: replace
-        path: /spec/replicas
-        value: 1
-
   # V6 N+1 workloads must be scraped per pod. Scraping the load-balanced
   # ClusterIP Service as a single Prometheus target can stick to one replica and
   # miss process-local counters emitted by another replica.
