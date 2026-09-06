@@ -84,10 +84,12 @@
 - [x] test kill-pod + mesure du temps de récupération ajouté
 - [x] régression V5 paramétrable avec `api-gateway replicas=2`
 - [x] timeout healthy-path CRC ajusté après observation du dépassement de 2 s sous charge N+1
-- [ ] validation runtime CRC phase A (`V6 OK (phase A)`)
+- [x] restauration automatique des credentials de démonstration Keycloak après restart du pod
+- [x] validation runtime CRC phase A (`V6 OK (phase A)`)
 
 ### Phase B — stateful / dépendances
-- [ ] panne PostgreSQL + persistance PVC + mesure RTO/RPO observé
+- [x] test PostgreSQL pod-restart + persistance PVC + mesure RTO/RPO observé ajouté
+- [ ] validation runtime PostgreSQL recovery
 - [ ] panne Kafka + backlog outbox + drain après reprise
 - [ ] panne Keycloak + comportement JWT existant / nouveau token
 - [ ] externaliser ou redéfinir l’état de `mock-sct-inst` avant N+1
