@@ -89,9 +89,12 @@
 
 ### Phase B — stateful / dépendances
 - [x] test PostgreSQL pod-restart + persistance PVC + mesure RTO/RPO observé ajouté
-- [ ] validation runtime PostgreSQL recovery
-- [ ] panne Kafka + backlog outbox + drain après reprise
-- [ ] panne Keycloak + comportement JWT existant / nouveau token
+- [x] validation runtime PostgreSQL recovery (`V6 OK (phase B1)`, 36 s, même PVC, 0 ligne sélectionnée perdue)
+- [x] panne Kafka + backlog outbox + drain après reprise
+- [x] validation runtime Kafka/Outbox (`V6 OK (phase B2)`, backlog 3, 2 tentatives échouées, drain 3/3 en 7 s, audit exactement-une-fois logique)
+- [x] découverte Prometheus par pod pour les workloads N+1
+- [x] test panne Keycloak + JWT existant / nouveau token ajouté
+- [ ] validation runtime Keycloak outage/recovery
 - [ ] externaliser ou redéfinir l’état de `mock-sct-inst` avant N+1
 - [ ] timeout Wero/EPI + état `UNKNOWN`
 - [ ] panne SCT Inst + réconciliation
