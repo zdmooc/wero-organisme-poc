@@ -97,9 +97,11 @@
 - [x] `startupProbe` Keycloak adaptée au démarrage Quarkus lent sur CRC
 - [x] refresh JWK forcé à 5 s sur les resource servers OIDC du seul overlay CRC
 - [x] validation runtime Keycloak outage/recovery (`V6 OK (phase B3)`, JWT existant utilisable, nouveau token indisponible pendant panne, token recovery 131 s, autorisation JWT/JWK 135 s)
-- [ ] externaliser ou redéfinir l’état de `mock-sct-inst` avant N+1
+- [x] externaliser l’état `mock-sct-inst` dans PostgreSQL partagé
+- [x] passer `mock-sct-inst` à 2 replicas + PDB `minAvailable=1`
+- [x] validation failover inter-pods SCT Inst (`V6 OK (phase B4)`: POST sur pod A, suppression pod A, GET/reconcile sur pod B, même `settlementId`, 1 rail row, 1 ledger settlement)
 - [ ] timeout Wero/EPI + état `UNKNOWN`
-- [ ] panne SCT Inst + réconciliation
+- [ ] panne Wero/EPI + rétablissement contrôlé
 - [ ] tests retry/idempotence sous panne
 - [ ] modes dégradés
 
