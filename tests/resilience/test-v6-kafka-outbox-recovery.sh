@@ -91,6 +91,14 @@ spec:
 EOF
 sleep 3
 
+# A NetworkPolicy is guaranteed to govern new connections but may not tear down
+# an already-established Kafka TCP session immediately on every CNI. Restart the
+# stateless payment-service pods while the deny policy is active so both
+# OutboxPublisher KafkaProducer instances must establish fresh, blocked sessions.
+echo "forcing fresh payment-service Kafka producer connections under the deny policy"
+oc delete pod -n "$PROJECT" -l app=payment-service >/dev/null
+oc rollout status deployment/payment-service -n "$PROJECT" --timeout=180s >/dev/null
+
 echo "==> 4. Commit a SETTLED payment while Kafka is unreachable"
 STAMP="$(date +%s)"
 CORR_ID="V6-KAFKA-${STAMP}"
@@ -145,6 +153,12 @@ for _ in $(seq 1 30); do
 done
 [[ "$BACKLOG_OBSERVED" == "true" ]] || {
   echo "Expected an unpublished outbox backlog with at least one failed Kafka publish attempt"
+  echo "Current outbox evidence for ${PAYMENT_ID}:"
+  pg_scalar "select event_type || ' published=' || coalesce(published_at::text,'NULL') || ' attempts=' || publish_attempts || ' error=' || coalesce(last_error,'NULL') from outbox_events where aggregate_id='${PAYMENT_ID}' order by id;" || true
+  echo "Recent payment-service Kafka publisher logs:"
+  oc logs -n "$PROJECT" -l app=payment-service --since=3m --prefix 2>/dev/null \
+    | grep -E "${PAYMENT_ID}|Kafka publish|TimeoutException|failed" \
+    | tail -n 120 || true
   exit 1
 }
 AUDIT_BEFORE="$(pg_scalar "select count(*) from payment_audit_events where payment_id='${PAYMENT_ID}';")"
