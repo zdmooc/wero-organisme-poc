@@ -83,7 +83,7 @@ tests/               E2E, sécurité, observabilité, GitOps, résilience
 - V3B : API Gateway et isolation Zero Trust — validé CRC
 - V4 : observabilité E2E — validé CRC
 - V5 : GitOps / Kustomize / OpenShift GitOps / Argo CD — validé CRC
-- V6 : SPOF, chaos, HA et résilience — phases A, B1, B2, B3, B4 et B5 validées CRC ; B6 récupération contrôlée en cours
+- V6 : SPOF, chaos, HA et résilience — phases A, B1, B2, B3, B4 et B5 validées CRC ; B6 implémentée, validation CRC en attente
 - V7 : branchement optionnel à un sandbox externe lorsque possible
 
 ## V5 GitOps
@@ -104,7 +104,7 @@ La phase B4 a supprimé le SPOF fonctionnel de `mock-sct-inst` : son état de se
 
 La phase B5 a validé la panne Wero/EPI avant rail : le paiement passe `UNKNOWN`, SCT Inst reste à 0 ligne, aucun settlement ledger n’est créé, la même idempotency key ne provoque aucun blind replay pendant ni après la panne, Wero revient à deux replicas en 11 s et la réconciliation `NOT_FOUND` conserve `UNKNOWN`.
 
-B6 introduit une récupération explicite de ce cas pré-rail : confirmation opérateur obligatoire, preflight SCT Inst `NOT_FOUND`, claim atomique local `UNKNOWN -> RECOVERY_PENDING`, puis une seule resoumission contrôlée. Aucun `UNKNOWN` arbitraire n’est automatiquement rejoué.
+B6 introduit une récupération explicite de ce cas pré-rail : confirmation opérateur obligatoire, preflight SCT Inst `NOT_FOUND`, claim atomique local `UNKNOWN -> RECOVERY_PENDING`, puis une seule resoumission contrôlée. Aucun `UNKNOWN` arbitraire n’est automatiquement rejoué. Le code et le test B6 sont présents dans la branche mais doivent encore être validés sur CRC.
 
 PostgreSQL, Kafka/Redpanda et Keycloak restent des dépendances mono-instance dans ce lab. CRC étant mono-nœud, ces validations couvrent des pannes de pod/processus et des indisponibilités contrôlées, pas une panne de nœud, zone ou site.
 
