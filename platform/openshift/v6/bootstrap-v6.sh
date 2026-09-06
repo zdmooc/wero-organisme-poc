@@ -6,7 +6,8 @@ GITOPS_NS="openshift-gitops"
 APP="wero-poc-crc"
 TARGET_REVISION="v6-spof-chaos-ha-resilience"
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-STATELESS=(api-gateway payment-service consumer-psp event-audit-service mock-wero mock-sct-inst)
+STATELESS=(api-gateway payment-service consumer-psp event-audit-service mock-wero)
+STATEFUL_SPOF=(postgresql kafka keycloak mock-sct-inst)
 
 command -v oc >/dev/null || { echo "oc is required"; exit 1; }
 oc whoami >/dev/null 2>&1 || { echo "Log in to OpenShift first"; exit 1; }
@@ -60,9 +61,12 @@ for _ in $(seq 1 60); do
     fi
   done
 
+  SCT_REPLICAS="$(oc get deployment mock-sct-inst -n "$PROJECT" -o jsonpath='{.spec.replicas}' 2>/dev/null || true)"
+
   if [[ "$SYNC" == "Synced" && "$HEALTH" == "Healthy" \
         && "$SYNC_REVISION" == "$EXPECTED_REVISION" \
-        && "$DESIRED_READY" == "true" && "$PDB_READY" == "true" ]]; then
+        && "$DESIRED_READY" == "true" && "$PDB_READY" == "true" \
+        && "$SCT_REPLICAS" == "1" ]]; then
     READY=true
     break
   fi
@@ -75,6 +79,7 @@ done
   for d in "${STATELESS[@]}"; do
     echo "$d replicas=$(oc get deployment "$d" -n "$PROJECT" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo '<missing>')"
   done
+  echo "mock-sct-inst replicas=$(oc get deployment mock-sct-inst -n "$PROJECT" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo '<missing>')"
   oc get application "$APP" -n "$GITOPS_NS"
   exit 1
 }
@@ -95,4 +100,9 @@ for p in "${STATELESS[@]}"; do
   [[ "$MIN_AVAILABLE" == "1" ]] || { echo "$p PDB minAvailable expected 1, got $MIN_AVAILABLE"; exit 1; }
 done
 
-echo "V6 bootstrap OK: Argo CD now reconciles the V6 branch with two stateless replicas and PDB minAvailable=1."
+[[ "$(oc get deployment mock-sct-inst -n "$PROJECT" -o jsonpath='{.spec.replicas}')" == "1" ]] || {
+  echo "mock-sct-inst must remain single replica until its in-memory settlement state is externalized"
+  exit 1
+}
+
+echo "V6 bootstrap OK: Argo CD reconciles five truly stateless workloads at two replicas with PDB minAvailable=1; mock-sct-inst remains a documented stateful SPOF."
