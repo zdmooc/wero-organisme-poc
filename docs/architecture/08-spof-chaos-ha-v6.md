@@ -2,7 +2,7 @@
 
 ## Goal
 
-V6 turns the V5 GitOps deployment into a resilience lab. The objective is not to claim production-grade HA on CRC, but to identify every single point of failure, inject controlled failures, measure recovery and progressively remove avoidable SPOFs.
+V6 turns the V5 GitOps deployment into a resilience lab. The objective is not to claim production-grade HA on CRC, but to identify single points of failure, inject controlled failures, measure recovery and progressively remove avoidable SPOFs.
 
 The V5 business invariants remain mandatory after every V6 experiment:
 
@@ -13,112 +13,62 @@ The V5 business invariants remain mandatory after every V6 experiment:
 - transactional outbox preserves events;
 - Kafka audit retains `paymentId`, `correlationId` and trace continuity;
 - Prometheus, Jaeger and Grafana remain usable;
-- Argo CD remains `Synced/Healthy` after convergence.
+- Argo CD returns to `Synced/Healthy` after convergence.
 
 ## CRC limitation
 
 OpenShift Local / CRC is a single-node lab. Two replicas on CRC protect against a **pod/process failure**, not against node, hypervisor, storage-zone or site failure.
 
-V6 therefore distinguishes:
+V6 distinguishes:
 
-1. **pod-level HA validated on CRC**;
-2. **stateful recovery validated on CRC**;
-3. **multi-node / multi-zone HA documented as production target only** until a suitable cluster exists.
+1. pod-level HA validated on CRC;
+2. stateful/dependency recovery validated on CRC;
+3. multi-node / multi-zone HA documented as a production target only.
 
-## Initial SPOF catalogue
+## Current SPOF catalogue
 
-| Component | V5 baseline | V6 phase A | Failure consequence | V6 treatment |
-|---|---:|---:|---|---|
-| API Gateway | 1 replica | 2 replicas | public payment API unavailable | N+1 + PDB + pod-kill test |
-| Payment Service | 1 | 2 | payment orchestration unavailable | N+1 + PDB + pod-kill test |
-| Consumer PSP | 1 | 2 | synchronous payment chain unavailable | N+1 + PDB + pod-kill test |
-| Event Audit | 1 | 2 | audit consumption delayed | N+1 + PDB + pod-kill test |
-| Wero/EPI mock | 1 | 2 | simulated external orchestration unavailable | N+1 + PDB + pod-kill test |
-| SCT Inst mock | 1 | 1 | simulated rail/status unavailable | explicit SPOF until settlement state is externalized |
-| PostgreSQL | 1 | 1 | state/ledger/outbox unavailable | explicit phase-B SPOF |
-| Redpanda/Kafka | 1 | 1 | event publication/consumption unavailable | explicit phase-B SPOF; outbox must buffer |
-| Keycloak | 1 | 1 | new token acquisition / IAM path impacted | explicit phase-B SPOF |
-| CRC node | 1 node | 1 node | complete lab outage | cannot be removed on CRC |
-| OpenShift router/DNS/control plane | CRC-managed | CRC-managed | routing/control-plane outage | observe/document; multi-node target later |
+| Component | V5 | Current V6 CRC | V6 treatment |
+|---|---:|---:|---|
+| API Gateway | 1 | 2 | N+1 + PDB + pod-kill |
+| Payment Service | 1 | 2 | N+1 + PDB + pod-kill |
+| Consumer PSP | 1 | 2 | N+1 + PDB + pod-kill |
+| Event Audit | 1 | 2 | N+1 + PDB + pod-kill |
+| Wero/EPI mock | 1 | 2 | N+1 + PDB + outage tests |
+| SCT Inst mock | 1 | 2 | PostgreSQL shared settlement state + PDB + inter-pod failover |
+| PostgreSQL | 1 | 1 | pod recovery on same PVC validated; still a single-instance dependency |
+| Redpanda/Kafka | 1 | 1 | Outbox buffering/replay validated; broker still single-instance and ephemeral |
+| Keycloak | 1 | 1 | degraded JWT mode + recovery measured; still single-instance |
+| CRC node | 1 | 1 | cannot be removed on CRC |
 
-## Important discovery: mock-sct-inst is stateful
+## Important discoveries
 
-`mock-sct-inst` stores settlement results in an in-process map. Two replicas would therefore not share settlement state: a payment could settle on one pod while a later status/reconciliation request reaches another pod and returns `NOT_FOUND`.
+### SCT Inst state had to be externalized
 
-For phase A, CRC deliberately keeps `mock-sct-inst` at one replica. It must not be presented as stateless HA until its settlement state is moved to a shared durable store or the mock is redesigned to be deterministically stateless.
+Phase A discovered that `mock-sct-inst` kept settlement results in process memory. B4 moved this state to PostgreSQL (`sct_inst_transfers`). Two SCT Inst mock replicas can now share the same settlement and status/reconciliation can move between pods without returning a false `NOT_FOUND`.
 
-## Important discovery: healthy-path timeout under N+1 load
+### Healthy-path timeout under N+1 load
 
-The first V6 regression exposed a `ProcessingException` on the Payment Service because the V5 `consumer-psp` read timeout was 2000 ms. On single-node CRC, adding N+1 replicas increased local scheduling contention enough for the normal synchronous chain to exceed 2 seconds.
+The first V6 regression exposed a `ProcessingException` because the V5 `consumer-psp` read timeout was 2000 ms. On single-node CRC, N+1 scheduling contention made healthy traffic exceed 2 seconds. CRC therefore uses 4500 ms while the deliberate `TIMEOUT_AFTER_SETTLEMENT` path remains 5 seconds.
 
-For V6 CRC the healthy-path timeout is therefore 4500 ms. This remains below the intentional `TIMEOUT_AFTER_SETTLEMENT` failure scenario, where the rail mock sleeps for 5 seconds after settlement, so the designed `UNKNOWN`/reconciliation behavior remains testable.
+This is a lab-specific latency adjustment, not a production SLO recommendation.
 
-This is a lab-specific latency budget adjustment, not a production SLO recommendation.
+### Event-audit JTA boundary and Kafka replay
 
-## Important discovery: event-audit JTA boundary and Kafka replay
+The audit scheduler clears propagated JTA transaction context before local persistence. If a Kafka record in a batch fails, the consumer does not commit the batch and rewinds involved partitions so records are retried. `eventId` uniqueness keeps replay logically idempotent.
 
-Phase-B preparation exposed the same Narayana context-leak pattern previously fixed in the Payment Service: `event-audit-service` could fail with `Enlisted connection used without active transaction` while persisting a Kafka record from a scheduler thread.
+### Keycloak startup and JWK rotation on CRC
 
-Two protections are now explicit:
+Keycloak `start-dev --import-realm` can take long enough that an ordinary liveness probe kills startup. A `startupProbe` protects this window. The ephemeral realm can also generate a new signing key after restart, so the CRC-only overlay reduces Quarkus forced JWK refresh interval to 5 seconds on OIDC resource servers.
 
-- scheduler thread context clears propagated JTA `Transaction` state before `AuditStore` starts its own synchronous local transaction;
-- if any record in a polled Kafka batch fails, the consumer does not commit the batch and rewinds each involved partition to the earliest offset in that batch so the records are retried.
+These are CRC lab controls, not production Keycloak recommendations.
 
-`eventId` is unique in the audit database, so replay remains logically idempotent even when earlier records in the failed batch are processed again.
+## Phase A — pod HA
 
-## Important discovery: Keycloak startup and JWK rotation on CRC
+Phase A is validated with `V6 OK (phase A)`.
 
-The Keycloak `start-dev --import-realm` process performs Quarkus augmentation on this single-node CRC lab and can take long enough that the original liveness probe repeatedly terminated an otherwise healthy startup. A dedicated `startupProbe` now protects that bootstrap window before the normal readiness/liveness checks take over.
+Observed return to two ready replicas after deleting one pod:
 
-A second issue appeared after an intentional Keycloak restart: the ephemeral development store can generate a new realm signing key. N+1 Quarkus resource-server replicas can then temporarily hold different JWK cache states and reject a freshly issued JWT with `JWK with kid ... is not available`. To keep the lab deterministic, the CRC-only overlay sets `QUARKUS_OIDC_TOKEN_FORCED_JWK_REFRESH_INTERVAL=5S` on `api-gateway`, `payment-service` and `event-audit-service`.
-
-This setting is deliberately local to the CRC resilience lab. It is not a production recommendation for Keycloak key-rotation policy or OIDC cache tuning.
-
-## Phase A — stateless N+1 and pod chaos
-
-Five workloads are treated as truly stateless in phase A:
-
-- `api-gateway`
-- `payment-service`
-- `consumer-psp`
-- `event-audit-service`
-- `mock-wero`
-
-Each runs with two replicas and a `PodDisruptionBudget` with `minAvailable: 1`.
-
-The chaos test deliberately deletes one pod directly, then verifies that at least one ready replica survives and that the Deployment returns to two ready replicas.
-
-V6 phase A test sequence:
-
-```text
-V5 regression on V6 desired state
-        |
-        v
-verify 2 ready replicas + PDB for five stateless workloads
-        |
-        v
-for each stateless workload:
-  delete one running pod
-  verify >= 1 ready survivor
-  wait for 2 ready replicas
-  measure recovery seconds
-        |
-        v
-record PostgreSQL/Kafka/Keycloak/mock-sct-inst as known SPOFs
-        |
-        v
-full V5 business + observability regression again
-```
-
-The test is `tests/resilience/test-v6-pod-ha.sh`.
-
-### Phase A runtime evidence
-
-Phase A is validated on CRC. The complete test finished with `V6 OK (phase A)` after a successful V5/V4 business and observability regression both before and after pod chaos.
-
-Observed recovery to two ready replicas after deleting one pod:
-
-| Workload | Observed recovery |
+| Workload | Recovery |
 |---|---:|
 | API Gateway | 10 s |
 | Payment Service | 15 s |
@@ -126,171 +76,149 @@ Observed recovery to two ready replicas after deleting one pod:
 | Event Audit | 14 s |
 | Wero/EPI mock | 11 s |
 
-At least one replica remained ready in every case. PostgreSQL, Kafka, Keycloak and `mock-sct-inst` remained explicit single-replica SPOFs and were not falsely presented as HA.
+A full V4/V5 regression passed before and after pod chaos.
 
-## Phase B — stateful and dependency chaos
+## Phase B1 — PostgreSQL recovery
 
-Phase B starts only after phase A passes on CRC. That entry criterion is now satisfied.
+`tests/resilience/test-v6-postgresql-recovery.sh` passed:
 
-### PostgreSQL pod failure — phase B1
-
-Test: `tests/resilience/test-v6-postgresql-recovery.sh`.
-
-The scenario:
-
-- creates a known `SETTLED` payment through the full V5 regression;
-- captures payment, ledger and outbox evidence plus the PVC identity;
-- deletes the only PostgreSQL pod;
-- waits for a different PostgreSQL pod to become Ready and answer SQL;
-- measures observed recovery time;
-- verifies the same `postgresql-data` PVC is still attached;
-- verifies the committed payment status and selected ledger/outbox row counts survived unchanged;
-- waits for Argo CD to be `Synced/Healthy`;
-- runs a new full V5 business/observability transaction after recovery.
-
-#### Phase B1 runtime evidence
-
-Phase B1 is validated on CRC:
-
-- selected pre-failure payment: `SETTLED`;
-- selected ledger evidence: 1 row;
-- selected outbox evidence: 3 rows;
-- PostgreSQL pod recovery to Ready + SQL: **36 s**;
-- `postgresql-data` PVC identity remained unchanged;
+- pre-failure payment `SETTLED`;
+- ledger = 1;
+- outbox = 3;
+- PostgreSQL pod deleted;
+- Ready + SQL recovered in **36 s**;
+- same `postgresql-data` PVC;
 - selected payment/ledger/outbox evidence lost **0 rows**;
-- a new full V4/V5 business and observability regression succeeded after recovery.
+- new V4/V5 transaction passed afterward.
 
-This proves recovery of this single-instance PostgreSQL deployment from a pod/process restart while reusing the same persistent volume. It does **not** prove PostgreSQL HA and does **not** establish a production RPO of zero.
+This proves recovery of a single PostgreSQL instance on the same persistent volume, not PostgreSQL HA or a production RPO=0 claim.
 
-### Kafka / Redpanda outage — phase B2
+## Phase B2 — Kafka / transactional Outbox
 
-Test: `tests/resilience/test-v6-kafka-outbox-recovery.sh`.
+`tests/resilience/test-v6-kafka-outbox-recovery.sh` passed:
 
-The B2 scenario injects a deterministic Kafka connectivity outage with a temporary `NetworkPolicy`. Payment-service producer connections are refreshed under the deny policy so the outage is actually exercised rather than hidden by an already-established TCP session.
+- payment stayed `SETTLED` while Kafka was isolated;
+- ledger = 1;
+- pending Outbox backlog = **3**;
+- failed publish attempts = **2**;
+- audit rows during outage = **0**;
+- Outbox drained **3/3 in 7 s**;
+- audit converged to one logical `PAYMENT_CREATED`, `PAYMENT_PROCESSING`, `PAYMENT_SETTLED`;
+- V4/V5 regression passed afterward.
 
-The scenario:
+The Redpanda broker is still one ephemeral lab instance. B2 validates Outbox buffering/replay, not broker HA.
 
-- starts from a full healthy V5/V4 regression;
-- isolates the Kafka pod from in-namespace clients;
-- creates and authorizes a new payment while Kafka is unreachable;
-- verifies the business transaction and ledger still commit to PostgreSQL;
-- verifies unpublished outbox rows accumulate and publish attempts fail;
-- restores Kafka connectivity;
-- measures time until all three payment outbox events are published;
-- waits until audit contains exactly one logical `PAYMENT_CREATED`, `PAYMENT_PROCESSING` and `PAYMENT_SETTLED` event;
-- runs a new full V5/V4 regression after recovery.
+## Phase B3 — Keycloak outage
 
-#### Phase B2 runtime evidence
+`tests/resilience/test-v6-keycloak-recovery.sh` passed:
 
-Phase B2 is validated on CRC:
+- controlled Keycloak scale `1 -> 0` with temporary Argo self-heal suspension;
+- already-issued JWT remained usable during outage;
+- fresh token acquisition failed during outage;
+- token issuance recovered in **131 s**;
+- fresh-JWT authorization / JWK convergence recovered in **135 s**;
+- Argo returned `Synced/Healthy`;
+- V4/V5 regression passed.
 
-- payment status remained `SETTLED` during Kafka unavailability;
-- ledger row count for the chaos payment: 1;
-- pending outbox backlog: **3**;
-- failed publish attempts observed: **2**;
-- audit rows before Kafka recovery: **0**;
-- outbox drained **3/3 in 7 s** after connectivity returned;
-- audit converged to exactly one logical `PAYMENT_CREATED`, `PAYMENT_PROCESSING`, `PAYMENT_SETTLED`;
-- the complete V4/V5 regression succeeded after recovery.
+This is a time-bounded degraded mode using cached JWT verification, not Keycloak HA.
 
-This validates transactional-outbox buffering and replay semantics. It does not make the broker HA. The current Redpanda lab still uses one replica and ephemeral broker data under `/tmp`, so broker-level durability/RPO remains a separate limitation to address.
+## Phase B4 — SCT Inst shared state / inter-pod failover
 
-### Keycloak outage — phase B3
+`tests/resilience/test-v6-sct-inst-shared-state.sh` passed with `V6 OK (phase B4)`:
 
-Test: `tests/resilience/test-v6-keycloak-recovery.sh`.
+- `TIMEOUT_AFTER_SETTLEMENT` left local payment `UNKNOWN` while shared SCT Inst state was `SETTLED`;
+- the pod that accepted the initial SCT Inst POST was identified and deleted;
+- a different SCT Inst pod served status/reconciliation;
+- the same `settlementId` was returned;
+- `UNKNOWN -> SETTLED` reconciliation succeeded;
+- exactly one shared rail row and one settlement ledger remained;
+- deployment returned to two replicas;
+- V4/V5 regression passed afterward.
 
-A plain deny-all `NetworkPolicy` was not a reliable Keycloak outage mechanism on this single-node CRC because router/node networking behavior could still expose the Route, while also interfering with kubelet probes. The final deterministic scenario therefore temporarily suspends Argo CD self-heal and scales the single Keycloak Deployment from one replica to zero for the controlled failure window. Cleanup always restores the desired replica count and self-heal.
+Detailed design: `docs/architecture/09-sct-inst-shared-state-v6-b4.md`.
 
-The scenario:
+## Phase B5 — Wero/EPI outage before the rail
 
-- starts from a full V5/V4 healthy regression;
-- acquires fresh short-lived Alice/Auditor JWTs and warms OIDC/JWK caches;
-- temporarily disables Argo self-heal for the controlled chaos window;
-- scales the only Keycloak replica to zero and proves no pod remains;
-- verifies an already-issued Alice JWT can still read committed business state while Keycloak is absent;
-- verifies fresh token acquisition fails during the outage;
-- restores Keycloak to one replica and waits for startup;
-- restores demo credentials from OpenShift Secrets without printing them;
-- measures fresh-token issuance recovery;
-- explicitly waits for new-key JWK convergence on the N+1 protected resource-server path;
-- restores Argo self-heal and waits for `Synced/Healthy`;
-- runs the complete V4/V5 business and observability regression again.
+`tests/resilience/test-v6-wero-outage-unknown.sh` passed with `V6 OK (phase B5)`:
 
-#### Phase B3 runtime evidence
+- both Wero/EPI mock replicas stopped;
+- authorized payment became local `UNKNOWN`;
+- SCT Inst shared state contained **0 rows**;
+- settlement ledger contained **0 rows**;
+- Outbox contained `PAYMENT_CREATED`, `PAYMENT_PROCESSING`, `PAYMENT_UNKNOWN`;
+- same idempotency key during outage did not blindly resend;
+- Wero recovered to two replicas and Argo `Synced/Healthy` in **11 s**;
+- same idempotency key after recovery still did not blindly resend;
+- reconciliation returned `railStatus=NOT_FOUND`, `afterStatus=UNKNOWN`;
+- V4/V5 regression passed afterward.
 
-Phase B3 is validated on CRC with `V6 OK (phase B3)`:
+This proves the conservative default: an `UNKNOWN` is not automatically converted to failure and is not automatically retried.
 
-- existing JWT remained usable while Keycloak had **0 replicas**;
-- fresh token acquisition was unavailable during the IAM outage;
-- fresh token issuance recovered in **131 s** after Keycloak restart;
-- fresh-JWT business authorization / JWK convergence recovered in **135 s**;
-- Argo CD returned to `Synced/Healthy`;
-- a new consent reached `PENDING_SCA`, SCA reached `AUTHORIZED`, payment reached `SETTLED`;
-- ledger, Kafka audit, Prometheus, Jaeger and Grafana checks all passed;
-- the final regression ended with both `V4 OK` and `V5 OK`.
+## Phase B6 — controlled pre-rail UNKNOWN recovery
 
-The realm access-token lifespan is 300 s in this lab, so this proves only a **time-bounded degraded mode** for already-issued JWTs. It does not make single-instance Keycloak HA. A production target still requires clustered Keycloak, durable shared state/database, planned signing-key rotation and HA for the backing database and ingress path.
+B6 is implemented and awaiting CRC runtime validation.
 
-### SCT Inst state and failover
+Endpoint:
 
-Before claiming N+1 for `mock-sct-inst`, externalize or redesign its settlement state, then verify that a status query can land on a different pod without losing the final settlement state.
+```text
+POST /api/payments/{paymentId}/recover
+role: payment-reconcile
+body: {"confirmation":"RESUBMIT_AFTER_RAIL_NOT_FOUND"}
+```
 
-### External Wero / SCT Inst timeout
+Safety gates:
 
-- inject unavailability/timeout;
-- verify the payment enters the designed `UNKNOWN`/reconciliation path instead of blind replay;
-- restore the rail;
-- reconcile to the final state;
-- verify idempotency and ledger invariants.
+1. local status must be `UNKNOWN`;
+2. explicit confirmation is mandatory;
+3. a fresh SCT Inst status preflight runs outside JTA;
+4. `SETTLED` or `FAILED` is reconciled without resubmission;
+5. unavailable/non-final rail state waits;
+6. only `NOT_FOUND` can continue;
+7. a conditional database claim `UNKNOWN -> RECOVERY_PENDING` lets only one Payment Service replica own the recovery;
+8. the stored payment intent is resubmitted once;
+9. final state, ledger and Outbox are committed after the remote result;
+10. repeating recovery against a final payment is a no-op.
+
+Recovery Outbox evidence:
+
+- `PAYMENT_RECOVERY_STARTED`;
+- `PAYMENT_RECOVERED` for a known recovery result;
+- `PAYMENT_RECOVERY_FAILED` if the controlled attempt becomes uncertain again.
+
+Test: `tests/resilience/test-v6-controlled-recovery.sh`.
+
+Detailed design and B5 evidence: `docs/architecture/10-wero-outage-controlled-recovery-v6-b5-b6.md`.
+
+This is an educational controlled-recovery mechanism. It is not permission to automatically retry arbitrary `UNKNOWN` payments.
 
 ## Phase C — production HA target
 
-CRC cannot validate this phase. The target architecture should eventually include:
+CRC cannot validate this phase. Target topics remain:
 
 - multiple OpenShift worker nodes and failure domains;
-- hard pod anti-affinity / topology spread across nodes or zones;
-- HA ingress/router and external load balancing;
-- production-grade PostgreSQL HA with synchronous/asynchronous replication chosen from RPO/RTO requirements;
-- multi-broker Kafka/Redpanda with replicated partitions;
-- clustered Keycloak backed by an HA database;
+- anti-affinity/topology spread;
+- HA ingress/router/load balancing;
+- production PostgreSQL HA selected from business RPO/RTO requirements;
+- replicated multi-broker Kafka/Redpanda;
+- clustered Keycloak with HA backing database;
 - resilient secrets/PKI/HSM dependencies where applicable;
-- multi-site recovery design and tested runbooks.
+- multi-site recovery and tested runbooks.
 
 ## RTO / RPO evidence model
 
 For each chaos scenario record:
 
-- failure start timestamp;
-- detection timestamp;
+- failure start/detection;
 - minimum surviving service level;
-- recovery timestamp;
-- observed RTO;
-- data created immediately before the failure;
-- data present after recovery;
+- recovery timestamp and observed RTO;
+- data immediately before failure and after recovery;
 - observed RPO;
 - duplicate/replay count;
-- final business status;
-- Argo CD and observability state after recovery.
+- final business state;
+- Argo CD and observability state.
 
-No RPO=0 or RTO target is claimed until a business requirement and a matching architecture are explicitly defined.
+No production RPO=0 or RTO target is claimed until a business requirement and matching architecture are explicitly defined.
 
 ## GitOps rule
 
-All durable runtime resilience changes stay in Git and are reconciled by Argo CD. Chaos commands are imperative by design because they represent failures; recovery of declarative resources must come from Kubernetes/OpenShift controllers and GitOps, not from manually rebuilding desired state.
-
-## Entry criteria
-
-V5 is runtime validated by the CRC run that ended with both `V4 OK` and `V5 OK` on V5 head `7207f94`.
-
-## Exit criteria for V6 phase A
-
-All phase-A criteria are now satisfied on CRC:
-
-1. Argo CD was `Synced/Healthy` on `v6-spof-chaos-ha-resilience`;
-2. all five stateless deployments had two ready replicas;
-3. all five PDBs had `minAvailable=1`;
-4. `mock-sct-inst` remained explicitly single-replica until state is externalized;
-5. one pod was deleted from each stateless workload without losing every ready replica;
-6. every stateless deployment recovered to two ready replicas;
-7. the post-chaos V5 business/observability regression ended with `V4 OK` and `V5 OK`;
-8. the test ended with `V6 OK (phase A)`.
+Durable runtime resilience changes stay in Git and are reconciled by Argo CD. Chaos commands are imperative because they represent failures; recovery of declarative resources must come from Kubernetes/OpenShift controllers and GitOps, not from manually rebuilding desired state.
