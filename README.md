@@ -83,7 +83,7 @@ tests/               E2E, sécurité, observabilité, GitOps, résilience
 - V3B : API Gateway et isolation Zero Trust — validé CRC
 - V4 : observabilité E2E — validé CRC
 - V5 : GitOps / Kustomize / OpenShift GitOps / Argo CD — validé CRC
-- V6 : SPOF, chaos, HA et résilience — phase A en validation CRC
+- V6 : SPOF, chaos, HA et résilience — phase A validée CRC, phase B en cours
 - V7 : branchement optionnel à un sandbox externe lorsque possible
 
 ## V5 GitOps
@@ -100,7 +100,7 @@ La phase A met en N+1 les cinq workloads réellement stateless sur CRC : `api-ga
 
 `mock-sct-inst` reste volontairement à une seule réplique car son état de settlement est actuellement conservé en mémoire dans le processus ; le doubler sans externaliser cet état rendrait la réconciliation non déterministe.
 
-Le test `tests/resilience/test-v6-pod-ha.sh` tue volontairement un pod de chaque workload stateless, vérifie qu’au moins un replica reste prêt, mesure la récupération à deux replicas puis relance la régression métier/observabilité V5.
+La phase A est validée sur CRC : chaque workload stateless a survécu à la suppression d’un pod avec au moins un replica prêt, puis a récupéré à deux replicas. Les temps observés ont été de 10 s (API Gateway), 15 s (Payment Service), 10 s (Consumer PSP), 14 s (Event Audit) et 11 s (Wero/EPI mock). Une régression complète V5/V4 a réussi avant et après le chaos.
 
 PostgreSQL, Kafka/Redpanda, Keycloak et `mock-sct-inst` restent explicitement des SPOF pour la phase B. CRC étant mono-nœud, cette V6 valide la résistance à une panne de pod, pas à une panne de nœud ou de site.
 
