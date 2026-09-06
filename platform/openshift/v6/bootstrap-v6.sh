@@ -36,6 +36,18 @@ ACTUAL_REVISION="$(oc get application "$APP" -n "$GITOPS_NS" -o jsonpath='{.spec
   exit 1
 }
 
+# Earlier V6 phase-A revisions briefly managed a PDB for mock-sct-inst while it
+# was configured with two replicas. The rail mock is now intentionally kept at
+# one replica because settlement state is in-process. Remove that obsolete
+# managed object explicitly so a failed historical prune cannot keep Argo CD
+# OutOfSync/Degraded forever on an upgraded CRC workspace.
+echo "==> 1b. Clean obsolete V6 migration resources"
+if oc get pdb mock-sct-inst -n "$PROJECT" >/dev/null 2>&1; then
+  echo "removing obsolete pdb/mock-sct-inst"
+  oc delete pdb mock-sct-inst -n "$PROJECT" --wait=true >/dev/null
+fi
+oc annotate application "$APP" -n "$GITOPS_NS" argocd.argoproj.io/refresh=hard --overwrite >/dev/null
+
 echo "==> 2. Wait for V6 revision and desired state to converge"
 READY=false
 for _ in $(seq 1 60); do
@@ -62,11 +74,12 @@ for _ in $(seq 1 60); do
   done
 
   SCT_REPLICAS="$(oc get deployment mock-sct-inst -n "$PROJECT" -o jsonpath='{.spec.replicas}' 2>/dev/null || true)"
+  LEGACY_SCT_PDB="$(oc get pdb mock-sct-inst -n "$PROJECT" --ignore-not-found -o name 2>/dev/null || true)"
 
   if [[ "$SYNC" == "Synced" && "$HEALTH" == "Healthy" \
         && "$SYNC_REVISION" == "$EXPECTED_REVISION" \
         && "$DESIRED_READY" == "true" && "$PDB_READY" == "true" \
-        && "$SCT_REPLICAS" == "1" ]]; then
+        && "$SCT_REPLICAS" == "1" && -z "$LEGACY_SCT_PDB" ]]; then
     READY=true
     break
   fi
@@ -80,6 +93,7 @@ done
     echo "$d replicas=$(oc get deployment "$d" -n "$PROJECT" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo '<missing>')"
   done
   echo "mock-sct-inst replicas=$(oc get deployment mock-sct-inst -n "$PROJECT" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo '<missing>')"
+  echo "legacy mock-sct-inst PDB=${LEGACY_SCT_PDB:-<none>}"
   oc get application "$APP" -n "$GITOPS_NS"
   exit 1
 }
@@ -102,6 +116,10 @@ done
 
 [[ "$(oc get deployment mock-sct-inst -n "$PROJECT" -o jsonpath='{.spec.replicas}')" == "1" ]] || {
   echo "mock-sct-inst must remain single replica until its in-memory settlement state is externalized"
+  exit 1
+}
+! oc get pdb mock-sct-inst -n "$PROJECT" >/dev/null 2>&1 || {
+  echo "obsolete mock-sct-inst PDB is still present"
   exit 1
 }
 
