@@ -66,6 +66,14 @@ Two protections are now explicit:
 
 `eventId` is unique in the audit database, so replay remains logically idempotent even when earlier records in the failed batch are processed again.
 
+## Important discovery: Keycloak startup and JWK rotation on CRC
+
+The Keycloak `start-dev --import-realm` process performs Quarkus augmentation on this single-node CRC lab and can take long enough that the original liveness probe repeatedly terminated an otherwise healthy startup. A dedicated `startupProbe` now protects that bootstrap window before the normal readiness/liveness checks take over.
+
+A second issue appeared after an intentional Keycloak restart: the ephemeral development store can generate a new realm signing key. N+1 Quarkus resource-server replicas can then temporarily hold different JWK cache states and reject a freshly issued JWT with `JWK with kid ... is not available`. To keep the lab deterministic, the CRC-only overlay sets `QUARKUS_OIDC_TOKEN_FORCED_JWK_REFRESH_INTERVAL=5S` on `api-gateway`, `payment-service` and `event-audit-service`.
+
+This setting is deliberately local to the CRC resilience lab. It is not a production recommendation for Keycloak key-rotation policy or OIDC cache tuning.
+
 ## Phase A — stateless N+1 and pod chaos
 
 Five workloads are treated as truly stateless in phase A:
@@ -156,9 +164,9 @@ This proves recovery of this single-instance PostgreSQL deployment from a pod/pr
 
 ### Kafka / Redpanda outage — phase B2
 
-Implemented test: `tests/resilience/test-v6-kafka-outbox-recovery.sh`.
+Test: `tests/resilience/test-v6-kafka-outbox-recovery.sh`.
 
-The first B2 scenario injects a deterministic Kafka connectivity outage with a temporary `NetworkPolicy` instead of racing a short pod restart. The broker remains single-replica; only payment/audit connectivity to the Kafka pod is intentionally denied during the failure window.
+The B2 scenario injects a deterministic Kafka connectivity outage with a temporary `NetworkPolicy`. Payment-service producer connections are refreshed under the deny policy so the outage is actually exercised rather than hidden by an already-established TCP session.
 
 The scenario:
 
@@ -166,20 +174,62 @@ The scenario:
 - isolates the Kafka pod from in-namespace clients;
 - creates and authorizes a new payment while Kafka is unreachable;
 - verifies the business transaction and ledger still commit to PostgreSQL;
-- verifies at least one unpublished outbox row accumulates and records a failed publish attempt;
+- verifies unpublished outbox rows accumulate and publish attempts fail;
 - restores Kafka connectivity;
 - measures time until all three payment outbox events are published;
 - waits until audit contains exactly one logical `PAYMENT_CREATED`, `PAYMENT_PROCESSING` and `PAYMENT_SETTLED` event;
 - runs a new full V5/V4 regression after recovery.
 
-This scenario validates transactional-outbox buffering and replay semantics. It does not make the broker HA. The current Redpanda lab still uses one replica and ephemeral broker data under `/tmp`, so broker-level durability/RPO remains a separate limitation to address.
+#### Phase B2 runtime evidence
 
-### Keycloak outage
+Phase B2 is validated on CRC:
 
-- validate behavior with an already-issued JWT;
-- validate failure of fresh token acquisition while IAM is unavailable;
-- restore Keycloak and measure recovery;
-- ensure no secrets are exposed by the test.
+- payment status remained `SETTLED` during Kafka unavailability;
+- ledger row count for the chaos payment: 1;
+- pending outbox backlog: **3**;
+- failed publish attempts observed: **2**;
+- audit rows before Kafka recovery: **0**;
+- outbox drained **3/3 in 7 s** after connectivity returned;
+- audit converged to exactly one logical `PAYMENT_CREATED`, `PAYMENT_PROCESSING`, `PAYMENT_SETTLED`;
+- the complete V4/V5 regression succeeded after recovery.
+
+This validates transactional-outbox buffering and replay semantics. It does not make the broker HA. The current Redpanda lab still uses one replica and ephemeral broker data under `/tmp`, so broker-level durability/RPO remains a separate limitation to address.
+
+### Keycloak outage — phase B3
+
+Test: `tests/resilience/test-v6-keycloak-recovery.sh`.
+
+A plain deny-all `NetworkPolicy` was not a reliable Keycloak outage mechanism on this single-node CRC because router/node networking behavior could still expose the Route, while also interfering with kubelet probes. The final deterministic scenario therefore temporarily suspends Argo CD self-heal and scales the single Keycloak Deployment from one replica to zero for the controlled failure window. Cleanup always restores the desired replica count and self-heal.
+
+The scenario:
+
+- starts from a full V5/V4 healthy regression;
+- acquires fresh short-lived Alice/Auditor JWTs and warms OIDC/JWK caches;
+- temporarily disables Argo self-heal for the controlled chaos window;
+- scales the only Keycloak replica to zero and proves no pod remains;
+- verifies an already-issued Alice JWT can still read committed business state while Keycloak is absent;
+- verifies fresh token acquisition fails during the outage;
+- restores Keycloak to one replica and waits for startup;
+- restores demo credentials from OpenShift Secrets without printing them;
+- measures fresh-token issuance recovery;
+- explicitly waits for new-key JWK convergence on the N+1 protected resource-server path;
+- restores Argo self-heal and waits for `Synced/Healthy`;
+- runs the complete V4/V5 business and observability regression again.
+
+#### Phase B3 runtime evidence
+
+Phase B3 is validated on CRC with `V6 OK (phase B3)`:
+
+- existing JWT remained usable while Keycloak had **0 replicas**;
+- fresh token acquisition was unavailable during the IAM outage;
+- fresh token issuance recovered in **131 s** after Keycloak restart;
+- fresh-JWT business authorization / JWK convergence recovered in **135 s**;
+- Argo CD returned to `Synced/Healthy`;
+- a new consent reached `PENDING_SCA`, SCA reached `AUTHORIZED`, payment reached `SETTLED`;
+- ledger, Kafka audit, Prometheus, Jaeger and Grafana checks all passed;
+- the final regression ended with both `V4 OK` and `V5 OK`.
+
+The realm access-token lifespan is 300 s in this lab, so this proves only a **time-bounded degraded mode** for already-issued JWTs. It does not make single-instance Keycloak HA. A production target still requires clustered Keycloak, durable shared state/database, planned signing-key rotation and HA for the backing database and ingress path.
 
 ### SCT Inst state and failover
 
