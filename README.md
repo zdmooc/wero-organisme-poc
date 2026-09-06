@@ -83,7 +83,7 @@ tests/               E2E, sécurité, observabilité, GitOps, résilience
 - V3B : API Gateway et isolation Zero Trust — validé CRC
 - V4 : observabilité E2E — validé CRC
 - V5 : GitOps / Kustomize / OpenShift GitOps / Argo CD — validé CRC
-- V6 : SPOF, chaos, HA et résilience — phase A implémentée, validation CRC à exécuter
+- V6 : SPOF, chaos, HA et résilience — phase A en validation CRC
 - V7 : branchement optionnel à un sandbox externe lorsque possible
 
 ## V5 GitOps
@@ -96,10 +96,12 @@ Voir `docs/architecture/07-gitops-argocd-v5.md`.
 
 ## V6 Resilience
 
-La branche `v6-spof-chaos-ha-resilience` introduit une première couche N+1 sur CRC : les six composants Java stateless passent à deux replicas et disposent d’un `PodDisruptionBudget` avec `minAvailable=1`.
+La phase A met en N+1 les cinq workloads réellement stateless sur CRC : `api-gateway`, `payment-service`, `consumer-psp`, `event-audit-service` et `mock-wero`. Ils passent à deux replicas avec un `PodDisruptionBudget` `minAvailable=1`.
 
-Le test `tests/resilience/test-v6-pod-ha.sh` tue volontairement un pod de chaque composant, vérifie qu’au moins un replica reste prêt, mesure la récupération à deux replicas puis relance la régression métier/observabilité V5.
+`mock-sct-inst` reste volontairement à une seule réplique car son état de settlement est actuellement conservé en mémoire dans le processus ; le doubler sans externaliser cet état rendrait la réconciliation non déterministe.
 
-PostgreSQL, Kafka/Redpanda et Keycloak restent volontairement identifiés comme SPOF à une seule réplique pour la phase B. CRC étant mono-nœud, cette V6 valide la résistance à une panne de pod, pas à une panne de nœud ou de site.
+Le test `tests/resilience/test-v6-pod-ha.sh` tue volontairement un pod de chaque workload stateless, vérifie qu’au moins un replica reste prêt, mesure la récupération à deux replicas puis relance la régression métier/observabilité V5.
+
+PostgreSQL, Kafka/Redpanda, Keycloak et `mock-sct-inst` restent explicitement des SPOF pour la phase B. CRC étant mono-nœud, cette V6 valide la résistance à une panne de pod, pas à une panne de nœud ou de site.
 
 Voir `docs/architecture/08-spof-chaos-ha-v6.md`.
