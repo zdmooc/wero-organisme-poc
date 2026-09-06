@@ -28,6 +28,7 @@ fi
 configure_keycloak_demo_users() {
   local kc_admin_user kc_admin_password alice_password auditor_password
   local keycloak_pod keycloak_pod_ip kcadm_server kc_host alice_token
+  local token_ok="false"
 
   oc rollout status deployment/keycloak -n "$PROJECT" --timeout=240s >/dev/null
 
@@ -50,11 +51,10 @@ configure_keycloak_demo_users() {
   MSYS_NO_PATHCONV=1 oc exec -n "$PROJECT" "$keycloak_pod" -- /opt/keycloak/bin/kcadm.sh set-password \
     -r mayabanque --username auditor --new-password "$auditor_password" >/dev/null
 
-  # The CRC Keycloak lab uses its local dev store. A pod restart can therefore
-  # recreate the imported realm/users without the external demo passwords.
-  # Prove that direct-grant authentication works again before running E2E tests.
+  # The CRC Keycloak lab uses its local dev store. A pod restart can recreate
+  # the imported realm/users without the external demo passwords. Prove that
+  # direct-grant authentication works again before any E2E regression starts.
   kc_host="$(oc get route keycloak -n "$PROJECT" -o jsonpath='{.spec.host}')"
-  alice_token=""
   for _ in $(seq 1 12); do
     alice_token="$(curl -sS -X POST \
       "http://${kc_host}/realms/mayabanque/protocol/openid-connect/token" \
@@ -64,27 +64,14 @@ configure_keycloak_demo_users() {
       -d 'username=alice' \
       --data-urlencode "password=${alice_password}" \
       | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')"
-    [[ -n "$alice_token" ]] && break
+    if [[ -n "$alice_token" ]]; then
+      token_ok="true"
+      break
+    fi
     sleep 5
   done
 
   unset kc_admin_password alice_password auditor_password alice_token
-  [[ -n "${kc_admin_user:-}" ]] || true
-  [[ -n "$keycloak_pod" ]] || return 1
-
-  # Re-check without printing any credential/token material.
-  local token_ok="false"
-  alice_password="$(oc get secret wero-v3-demo-users -n "$PROJECT" -o jsonpath='{.data.ALICE_PASSWORD}' | base64 -d)"
-  alice_token="$(curl -sS -X POST \
-    "http://${kc_host}/realms/mayabanque/protocol/openid-connect/token" \
-    -H 'Content-Type: application/x-www-form-urlencoded' \
-    -d 'client_id=mayabanque-cli' \
-    -d 'grant_type=password' \
-    -d 'username=alice' \
-    --data-urlencode "password=${alice_password}" \
-    | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')"
-  [[ -n "$alice_token" ]] && token_ok="true"
-  unset alice_password alice_token kc_admin_password auditor_password
   [[ "$token_ok" == "true" ]] || { echo "Keycloak demo credential smoke test failed"; return 1; }
 }
 
