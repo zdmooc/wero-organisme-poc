@@ -189,7 +189,7 @@ OUTAGE_TOKEN="$(issue_alice_token)"
 }
 echo "existing JWT accepted; fresh token acquisition unavailable as expected"
 
-echo "==> 5. Restore Keycloak and measure fresh-token recovery"
+echo "==> 5. Restore Keycloak and measure token + JWK authorization recovery"
 RECOVERY_START="$(date +%s)"
 oc scale deployment/keycloak -n "$PROJECT" --replicas=1 >/dev/null
 oc rollout status deployment/keycloak -n "$PROJECT" --timeout=420s >/dev/null
@@ -209,8 +209,46 @@ done
   echo "Fresh token acquisition did not recover after Keycloak returned"
   exit 1
 }
-AUTH_RTO="$(( $(date +%s) - RECOVERY_START ))"
+TOKEN_RTO="$(( $(date +%s) - RECOVERY_START ))"
 unset FRESH_TOKEN OUTAGE_TOKEN
+
+echo "fresh token acquisition recovered in ${TOKEN_RTO}s; waiting for resource-server JWK convergence"
+
+# The CRC Keycloak dev store can generate a new signing key after restart. A
+# resource server that cached the previous JWK set can transiently reject a
+# freshly issued token with an unknown kid until its OIDC provider refreshes.
+# Prove end-to-end authorization recovery explicitly before the full V5 run.
+refresh_demo_tokens
+JWK_READY=false
+PAYMENT_CODE=""
+AUDIT_CODE=""
+for _ in $(seq 1 90); do
+  PAYMENT_CODE="$(curl -sS --connect-timeout 2 --max-time 8 \
+    -o /tmp/v6-keycloak-jwk-payment.json -w '%{http_code}' \
+    "http://${GATEWAY_HOST}/api/payments/${EXISTING_PAYMENT_ID}" \
+    -H "Authorization: Bearer ${ALICE_TOKEN}" \
+    -H 'X-Correlation-Id: V6-KEYCLOAK-JWK-PAYMENT' 2>/dev/null || true)"
+
+  AUDIT_CODE="$(curl -sS --connect-timeout 2 --max-time 8 \
+    -o /tmp/v6-keycloak-jwk-audit.json -w '%{http_code}' \
+    "http://${GATEWAY_HOST}/api/audit/events/${EXISTING_PAYMENT_ID}" \
+    -H "Authorization: Bearer ${AUDITOR_TOKEN}" \
+    -H 'X-Correlation-Id: V6-KEYCLOAK-JWK-AUDIT' 2>/dev/null || true)"
+
+  if [[ "$PAYMENT_CODE" == "200" && "$AUDIT_CODE" == "200" ]] \
+     && grep -q '"status":"SETTLED"' /tmp/v6-keycloak-jwk-payment.json \
+     && grep -q 'PAYMENT_SETTLED' /tmp/v6-keycloak-jwk-audit.json; then
+    JWK_READY=true
+    break
+  fi
+  sleep 2
+done
+[[ "$JWK_READY" == "true" ]] || {
+  echo "Fresh JWT authorization did not converge after Keycloak restart (paymentHTTP=${PAYMENT_CODE:-<none>} auditHTTP=${AUDIT_CODE:-<none>})"
+  exit 1
+}
+AUTHZ_RTO="$(( $(date +%s) - RECOVERY_START ))"
+echo "fresh JWT business authorization recovered in ${AUTHZ_RTO}s"
 
 set_self_heal true
 SELF_HEAL_SUSPENDED=false
@@ -228,9 +266,7 @@ for _ in $(seq 1 60); do
 done
 [[ "$ARGO_READY" == "true" ]] || { echo "Argo CD did not return to Synced/Healthy after Keycloak recovery"; exit 1; }
 
-echo "fresh token acquisition recovered in ${AUTH_RTO}s"
-
 echo "==> 6. Full V5 business/observability regression after Keycloak recovery"
 EXPECTED_GATEWAY_REPLICAS=2 "$ROOT/tests/e2e/test-v5-gitops.sh"
 
-echo "V6 OK (phase B3): an already-issued JWT remained usable while the single Keycloak replica was stopped, fresh token acquisition failed during the IAM outage, token issuance recovered in ${AUTH_RTO}s after Keycloak restarted, Argo CD returned to Synced/Healthy, and the full V5 regression passed afterward. This validates a time-bounded CRC degraded mode with cached JWT verification; it does not make the single-instance Keycloak deployment HA."
+echo "V6 OK (phase B3): an already-issued JWT remained usable while the single Keycloak replica was stopped, fresh token acquisition failed during the IAM outage, token issuance recovered in ${TOKEN_RTO}s and fresh-JWT business authorization/JWK convergence recovered in ${AUTHZ_RTO}s after Keycloak restarted, Argo CD returned to Synced/Healthy, and the full V5 regression passed afterward. This validates a time-bounded CRC degraded mode with cached JWT verification; it does not make the single-instance Keycloak deployment HA."
