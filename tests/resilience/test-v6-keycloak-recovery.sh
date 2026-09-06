@@ -74,13 +74,32 @@ refresh_demo_tokens() {
   echo "fresh demo JWTs acquired (values not printed)"
 }
 
-echo "==> 1. Preconditions and healthy V6 baseline"
-SYNC="$(oc get application "$APP" -n "$GITOPS_NS" -o jsonpath='{.status.sync.status}')"
-HEALTH="$(oc get application "$APP" -n "$GITOPS_NS" -o jsonpath='{.status.health.status}')"
-[[ "$SYNC" == "Synced" && "$HEALTH" == "Healthy" ]] || {
-  echo "Argo CD must be Synced/Healthy before Keycloak chaos (sync=$SYNC health=$HEALTH)"
+echo "==> 1. Recover any stale Keycloak chaos and wait for a healthy V6 baseline"
+# A previously interrupted B3 run may have left Keycloak probes recovering or,
+# in the worst case, the temporary deny policy behind. Remove only the known
+# B3 chaos object, then wait for Keycloak and Argo CD to converge before testing.
+oc delete networkpolicy "$CHAOS_POLICY" -n "$PROJECT" --ignore-not-found >/dev/null 2>&1 || true
+oc rollout status deployment/keycloak -n "$PROJECT" --timeout=240s >/dev/null
+
+BASELINE_READY=false
+for _ in $(seq 1 60); do
+  SYNC="$(oc get application "$APP" -n "$GITOPS_NS" -o jsonpath='{.status.sync.status}' 2>/dev/null || true)"
+  HEALTH="$(oc get application "$APP" -n "$GITOPS_NS" -o jsonpath='{.status.health.status}' 2>/dev/null || true)"
+  if [[ "$SYNC" == "Synced" && "$HEALTH" == "Healthy" ]]; then
+    BASELINE_READY=true
+    break
+  fi
+  sleep 5
+done
+[[ "$BASELINE_READY" == "true" ]] || {
+  echo "Argo CD did not return to Synced/Healthy before Keycloak chaos (sync=${SYNC:-<none>} health=${HEALTH:-<none>})"
+  oc get application "$APP" -n "$GITOPS_NS"
+  oc get deployment keycloak -n "$PROJECT"
+  oc get pods -n "$PROJECT" -l app=keycloak -o wide
   exit 1
 }
+echo "sync=Synced health=Healthy"
+
 [[ "$(oc get deployment keycloak -n "$PROJECT" -o jsonpath='{.spec.replicas}')" == "1" ]] || {
   echo "Keycloak must remain a single-replica SPOF for this test"
   exit 1
