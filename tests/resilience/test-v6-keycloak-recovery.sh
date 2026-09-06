@@ -6,14 +6,10 @@ GITOPS_NS="openshift-gitops"
 APP="wero-poc-crc"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CHAOS_POLICY="v6-chaos-deny-keycloak"
-KEYCLOAK_RESTARTED=false
 
 cleanup() {
   set +e
   oc delete networkpolicy "$CHAOS_POLICY" -n "$PROJECT" --ignore-not-found >/dev/null 2>&1 || true
-  if [[ "$KEYCLOAK_RESTARTED" == "true" ]]; then
-    configure_demo_users >/dev/null 2>&1 || true
-  fi
   unset ALICE_TOKEN AUDITOR_TOKEN SCA_CODE
 }
 trap cleanup EXIT
@@ -78,29 +74,6 @@ refresh_demo_tokens() {
   echo "fresh demo JWTs acquired (values not printed)"
 }
 
-configure_demo_users() {
-  local kc_admin_user kc_admin_password alice_password auditor_password keycloak_pod
-
-  oc rollout status deployment/keycloak -n "$PROJECT" --timeout=240s >/dev/null
-  keycloak_pod="$(oc get pods -n "$PROJECT" -l app=keycloak --field-selector=status.phase=Running \
-    --sort-by=.metadata.creationTimestamp -o name | tail -1 | cut -d/ -f2)"
-  [[ -n "$keycloak_pod" ]] || return 1
-
-  kc_admin_user="$(oc get secret keycloak-admin -n "$PROJECT" -o jsonpath='{.data.username}' | base64 -d)"
-  kc_admin_password="$(oc get secret keycloak-admin -n "$PROJECT" -o jsonpath='{.data.password}' | base64 -d)"
-  alice_password="$(oc get secret wero-v3-demo-users -n "$PROJECT" -o jsonpath='{.data.ALICE_PASSWORD}' | base64 -d)"
-  auditor_password="$(oc get secret wero-v3-demo-users -n "$PROJECT" -o jsonpath='{.data.AUDITOR_PASSWORD}' | base64 -d)"
-
-  MSYS_NO_PATHCONV=1 oc exec -n "$PROJECT" "$keycloak_pod" -- /opt/keycloak/bin/kcadm.sh config credentials \
-    --server http://127.0.0.1:8080 --realm master --user "$kc_admin_user" --password "$kc_admin_password" >/dev/null
-  MSYS_NO_PATHCONV=1 oc exec -n "$PROJECT" "$keycloak_pod" -- /opt/keycloak/bin/kcadm.sh set-password \
-    -r mayabanque --username alice --new-password "$alice_password" >/dev/null
-  MSYS_NO_PATHCONV=1 oc exec -n "$PROJECT" "$keycloak_pod" -- /opt/keycloak/bin/kcadm.sh set-password \
-    -r mayabanque --username auditor --new-password "$auditor_password" >/dev/null
-
-  unset kc_admin_password alice_password auditor_password
-}
-
 echo "==> 1. Preconditions and healthy V6 baseline"
 SYNC="$(oc get application "$APP" -n "$GITOPS_NS" -o jsonpath='{.status.sync.status}')"
 HEALTH="$(oc get application "$APP" -n "$GITOPS_NS" -o jsonpath='{.status.health.status}')"
@@ -126,8 +99,7 @@ PRE_CODE="$(curl -sS -o /tmp/v6-keycloak-pre.json -w '%{http_code}' \
   -H 'X-Correlation-Id: V6-KEYCLOAK-PRE')"
 [[ "$PRE_CODE" == "200" ]] || { echo "Pre-chaos authenticated read failed HTTP $PRE_CODE"; exit 1; }
 
-echo "==> 3. Isolate Keycloak and replace its pod so no pre-existing IAM connection survives"
-OLD_KEYCLOAK_POD="$(oc get pod -n "$PROJECT" -l app=keycloak -o jsonpath='{.items[0].metadata.name}')"
+echo "==> 3. Isolate Keycloak ingress deterministically"
 cat <<'EOF' | oc apply -n "$PROJECT" -f - >/dev/null
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -143,17 +115,14 @@ spec:
     - Ingress
   ingress: []
 EOF
-oc delete pod "$OLD_KEYCLOAK_POD" -n "$PROJECT" --wait=false >/dev/null
-KEYCLOAK_RESTARTED=true
-oc rollout status deployment/keycloak -n "$PROJECT" --timeout=240s >/dev/null
-NEW_KEYCLOAK_POD="$(oc get pod -n "$PROJECT" -l app=keycloak -o jsonpath='{.items[0].metadata.name}')"
-[[ "$NEW_KEYCLOAK_POD" != "$OLD_KEYCLOAK_POD" ]] || { echo "Keycloak pod was not replaced"; exit 1; }
 
-# A restarted CRC Keycloak imports demo users without the external demo
-# passwords. Restore them from Secrets through localhost while ingress remains
-# denied, so the following token failure proves IAM network unavailability,
-# not missing credentials.
-configure_demo_users
+# Do not restart Keycloak while this deny-all ingress policy is active. On CRC,
+# kubelet HTTP readiness/liveness probes also traverse pod ingress and can be
+# blocked by the policy, which would make a rollout wait measure probe isolation
+# rather than IAM behavior. The network partition itself is the deterministic
+# failure injected in B3.
+sleep 3
+oc get networkpolicy "$CHAOS_POLICY" -n "$PROJECT" >/dev/null
 
 echo "==> 4. Existing JWT remains usable while fresh token acquisition is unavailable"
 EXISTING_CODE="$(curl -sS --connect-timeout 2 --max-time 8 -o /tmp/v6-keycloak-existing.json -w '%{http_code}' \
@@ -196,6 +165,10 @@ done
 }
 AUTH_RTO="$(( $(date +%s) - RECOVERY_START ))"
 unset FRESH_TOKEN OUTAGE_TOKEN
+
+# The deny-all ingress policy may transiently make HTTP probes fail. Wait until
+# the deployment is healthy again before running the full regression.
+oc rollout status deployment/keycloak -n "$PROJECT" --timeout=240s >/dev/null
 
 echo "fresh token acquisition recovered in ${AUTH_RTO}s"
 
