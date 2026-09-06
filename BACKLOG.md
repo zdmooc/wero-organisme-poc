@@ -77,17 +77,20 @@
 ## V6 — SPOF / Résilience
 ### Phase A — pod HA sur CRC
 - [x] catalogue SPOF initial
-- [x] 2 replicas pour les 6 composants Java stateless
-- [x] PDB `minAvailable=1` pour les 6 composants stateless
+- [x] 2 replicas pour les 5 workloads réellement stateless
+- [x] PDB `minAvailable=1` pour les 5 workloads stateless
+- [x] `mock-sct-inst` reclassé stateful car settlement en mémoire
 - [x] bootstrap GitOps V6
 - [x] test kill-pod + mesure du temps de récupération ajouté
 - [x] régression V5 paramétrable avec `api-gateway replicas=2`
+- [x] timeout healthy-path CRC ajusté après observation du dépassement de 2 s sous charge N+1
 - [ ] validation runtime CRC phase A (`V6 OK (phase A)`)
 
 ### Phase B — stateful / dépendances
 - [ ] panne PostgreSQL + persistance PVC + mesure RTO/RPO observé
 - [ ] panne Kafka + backlog outbox + drain après reprise
 - [ ] panne Keycloak + comportement JWT existant / nouveau token
+- [ ] externaliser ou redéfinir l’état de `mock-sct-inst` avant N+1
 - [ ] timeout Wero/EPI + état `UNKNOWN`
 - [ ] panne SCT Inst + réconciliation
 - [ ] tests retry/idempotence sous panne
