@@ -82,14 +82,24 @@ tests/               E2E, sécurité, observabilité, GitOps, résilience
 - V3A : Keycloak, JWT/RBAC, consentement et SCA — validé CRC
 - V3B : API Gateway et isolation Zero Trust — validé CRC
 - V4 : observabilité E2E — validé CRC
-- V5 : GitOps / Kustomize / OpenShift GitOps / Argo CD — implémentation prête, validation CRC en cours
-- V6 : SPOF, chaos, HA et résilience
+- V5 : GitOps / Kustomize / OpenShift GitOps / Argo CD — validé CRC
+- V6 : SPOF, chaos, HA et résilience — phase A implémentée, validation CRC à exécuter
 - V7 : branchement optionnel à un sandbox externe lorsque possible
 
 ## V5 GitOps
 
-Git devient l’autorité du desired state pour les ressources runtime. L’Application Argo CD `wero-poc-crc` pointe vers `gitops/overlays/crc` avec synchronisation automatique, prune et self-heal.
+Git est l’autorité du desired state pour les ressources runtime. L’Application Argo CD `wero-poc-crc` synchronise automatiquement, prune et self-heal.
 
 Les secrets restent hors Git. Le build des images reste séparé du deployment plane ; la cible de production sera une promotion par image immutable/digest via pull request.
 
 Voir `docs/architecture/07-gitops-argocd-v5.md`.
+
+## V6 Resilience
+
+La branche `v6-spof-chaos-ha-resilience` introduit une première couche N+1 sur CRC : les six composants Java stateless passent à deux replicas et disposent d’un `PodDisruptionBudget` avec `minAvailable=1`.
+
+Le test `tests/resilience/test-v6-pod-ha.sh` tue volontairement un pod de chaque composant, vérifie qu’au moins un replica reste prêt, mesure la récupération à deux replicas puis relance la régression métier/observabilité V5.
+
+PostgreSQL, Kafka/Redpanda et Keycloak restent volontairement identifiés comme SPOF à une seule réplique pour la phase B. CRC étant mono-nœud, cette V6 valide la résistance à une panne de pod, pas à une panne de nœud ou de site.
+
+Voir `docs/architecture/08-spof-chaos-ha-v6.md`.
