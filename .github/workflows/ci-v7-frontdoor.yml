@@ -1,0 +1,119 @@
+name: V7 C5 Frontdoor HA render checks
+
+on:
+  push:
+    branches:
+      - v7-production-ha-architecture
+  pull_request:
+    branches:
+      - v6-spof-chaos-ha-resilience
+
+jobs:
+  frontdoor-ha-render:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pinned Kustomize 5.8.1
+        run: |
+          curl -fsSL -o /tmp/kustomize.tgz \
+            https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.8.1/kustomize_v5.8.1_linux_amd64.tar.gz
+          echo "029a7f0f4e1932c52a0476cf02a0fd855c0bb85694b82c338fc648dcb53a819d  /tmp/kustomize.tgz" | sha256sum -c -
+          tar -xzf /tmp/kustomize.tgz -C /tmp
+          /tmp/kustomize version
+
+      - name: Render C5 targets
+        run: |
+          set -euo pipefail
+          /tmp/kustomize build gitops/cluster/ingress-ha > /tmp/c5-ingress.yaml
+          /tmp/kustomize build gitops/components/frontdoor-ha > /tmp/c5-frontdoor.yaml
+          /tmp/kustomize build gitops/overlays/preprod-c5 > /tmp/c5-preprod.yaml
+          /tmp/kustomize build gitops/overlays/prod-c5 > /tmp/c5-prod.yaml
+
+      - name: Verify provider-neutral IngressController shards
+        run: |
+          set -euo pipefail
+          [[ "$(grep -c '^kind: IngressController$' /tmp/c5-ingress.yaml)" -eq 2 ]]
+          grep -qF 'name: mayabank-preprod-public' /tmp/c5-ingress.yaml
+          grep -qF 'name: mayabank-prod-public' /tmp/c5-ingress.yaml
+          grep -qF 'replicas: 2' /tmp/c5-ingress.yaml
+          grep -qF 'replicas: 3' /tmp/c5-ingress.yaml
+          grep -qF 'ingress.mayabanque.io/shard: preprod-public' /tmp/c5-ingress.yaml
+          grep -qF 'ingress.mayabanque.io/shard: prod-public' /tmp/c5-ingress.yaml
+
+          if grep -Eq '^[[:space:]]*(domain|defaultCertificate|endpointPublishingStrategy):' /tmp/c5-ingress.yaml; then
+            echo 'ERROR: provider-specific/immutable ingress field found in generic C5 scaffold'
+            exit 1
+          fi
+
+      - name: Verify public Route component
+        run: |
+          set -euo pipefail
+          [[ "$(grep -c '^kind: Route$' /tmp/c5-frontdoor.yaml)" -eq 2 ]]
+          grep -qF 'name: api-gateway-public' /tmp/c5-frontdoor.yaml
+          grep -qF 'name: keycloak-public' /tmp/c5-frontdoor.yaml
+          grep -qF 'requires-real-hostname: "true"' /tmp/c5-frontdoor.yaml
+          [[ "$(grep -c 'requires-real-hostname: "true"' /tmp/c5-frontdoor.yaml)" -eq 2 ]]
+          grep -qF 'termination: edge' /tmp/c5-frontdoor.yaml
+          grep -qF 'termination: reencrypt' /tmp/c5-frontdoor.yaml
+          [[ "$(grep -c 'insecureEdgeTerminationPolicy: Redirect' /tmp/c5-frontdoor.yaml)" -eq 2 ]]
+          grep -qF 'targetPort: https' /tmp/c5-frontdoor.yaml
+
+          if grep -Eq '^[[:space:]]*host:' /tmp/c5-frontdoor.yaml; then
+            echo 'ERROR: fictitious public hostname found in generic C5 Route component'
+            exit 1
+          fi
+
+      - name: Verify preproduction C5 frontdoor
+        run: |
+          set -euo pipefail
+          [[ "$(grep -c '^kind: Route$' /tmp/c5-preprod.yaml)" -eq 2 ]] || {
+            echo "ERROR: expected exactly 2 preprod public Routes"
+            grep -nE '^kind: Route$|^  name:' /tmp/c5-preprod.yaml || true
+            exit 1
+          }
+          grep -qF 'name: api-gateway-public' /tmp/c5-preprod.yaml
+          grep -qF 'name: keycloak-public' /tmp/c5-preprod.yaml
+          grep -qF 'ingress.mayabanque.io/shard: preprod-public' /tmp/c5-preprod.yaml
+          ! grep -qF 'name: jaeger' /tmp/c5-preprod.yaml || ! awk '/^kind: Route$/{r=1;next} r && /^  name: jaeger$/{exit 0} /^---$/{r=0} END{exit 1}' /tmp/c5-preprod.yaml
+          ! grep -qF 'name: prometheus' /tmp/c5-preprod.yaml || ! awk '/^kind: Route$/{r=1;next} r && /^  name: prometheus$/{exit 0} /^---$/{r=0} END{exit 1}' /tmp/c5-preprod.yaml
+          ! grep -qF 'name: grafana' /tmp/c5-preprod.yaml || ! awk '/^kind: Route$/{r=1;next} r && /^  name: grafana$/{exit 0} /^---$/{r=0} END{exit 1}' /tmp/c5-preprod.yaml
+          grep -qF 'service.beta.openshift.io/serving-cert-secret-name: keycloak-service-tls' /tmp/c5-preprod.yaml
+          grep -qF 'tlsSecret: keycloak-service-tls' /tmp/c5-preprod.yaml
+          grep -qF 'httpsPort: 8443' /tmp/c5-preprod.yaml
+          grep -qF 'serviceHttpsPort: 8443' /tmp/c5-preprod.yaml
+          grep -qF 'headers: xforwarded' /tmp/c5-preprod.yaml
+          grep -qF 'httpEnabled: true' /tmp/c5-preprod.yaml
+          grep -qF 'httpPort: 8080' /tmp/c5-preprod.yaml
+          grep -qF 'serviceHttpPort: 8080' /tmp/c5-preprod.yaml
+          grep -qF 'serviceName: keycloak' /tmp/c5-preprod.yaml
+
+      - name: Verify production C5 frontdoor
+        run: |
+          set -euo pipefail
+          [[ "$(grep -c '^kind: Route$' /tmp/c5-prod.yaml)" -eq 2 ]] || {
+            echo "ERROR: expected exactly 2 production public Routes"
+            grep -nE '^kind: Route$|^  name:' /tmp/c5-prod.yaml || true
+            exit 1
+          }
+          grep -qF 'name: api-gateway-public' /tmp/c5-prod.yaml
+          grep -qF 'name: keycloak-public' /tmp/c5-prod.yaml
+          grep -qF 'ingress.mayabanque.io/shard: prod-public' /tmp/c5-prod.yaml
+          grep -qF 'service.beta.openshift.io/serving-cert-secret-name: keycloak-service-tls' /tmp/c5-prod.yaml
+          grep -qF 'tlsSecret: keycloak-service-tls' /tmp/c5-prod.yaml
+          grep -qF 'httpsPort: 8443' /tmp/c5-prod.yaml
+          grep -qF 'serviceHttpsPort: 8443' /tmp/c5-prod.yaml
+          grep -qF 'headers: xforwarded' /tmp/c5-prod.yaml
+          grep -qF 'httpEnabled: true' /tmp/c5-prod.yaml
+          grep -qF 'serviceName: keycloak' /tmp/c5-prod.yaml
+
+      - name: Verify C5 desired state contains no Secret manifest
+        run: |
+          set -euo pipefail
+          for rendered in /tmp/c5-ingress.yaml /tmp/c5-frontdoor.yaml /tmp/c5-preprod.yaml /tmp/c5-prod.yaml; do
+            if grep -Eq '^kind:[[:space:]]*Secret[[:space:]]*$' "$rendered"; then
+              echo "ERROR: Secret manifest found in C5 rendered desired state: $rendered"
+              exit 1
+            fi
+          done
