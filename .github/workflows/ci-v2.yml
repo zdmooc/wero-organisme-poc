@@ -109,6 +109,18 @@ jobs:
               EXPECT_MIN_DOMAINS=7
             fi
 
+            if grep -q '^kind: Redpanda$' /tmp/wero-preprod-rendered.yaml; then
+              grep -q '^  name: redpanda$' /tmp/wero-preprod-rendered.yaml
+              ! grep -q '^  name: kafka$' /tmp/wero-preprod-rendered.yaml
+              grep -q 'redpanda-0.redpanda.wero-poc-preprod.svc.cluster.local:9093' /tmp/wero-preprod-rendered.yaml
+              [[ "$(grep -c '^[[:space:]]*- name: KAFKA_SECURITY_PROTOCOL$' /tmp/wero-preprod-rendered.yaml)" -eq 2 ]]
+              [[ "$(grep -c '^[[:space:]]*value: SASL_SSL$' /tmp/wero-preprod-rendered.yaml)" -eq 2 ]]
+              [[ "$(grep -c '^[[:space:]]*value: SCRAM-SHA-512$' /tmp/wero-preprod-rendered.yaml)" -eq 2 ]]
+              [[ "$(grep -c '^[[:space:]]*secretName: redpanda-client-ca$' /tmp/wero-preprod-rendered.yaml)" -eq 2 ]]
+              grep -q '^[[:space:]]*name: redpanda-payment-producer$' /tmp/wero-preprod-rendered.yaml
+              grep -q '^[[:space:]]*name: redpanda-event-audit-consumer$' /tmp/wero-preprod-rendered.yaml
+            fi
+
             [[ "$REPLICAS_2" -eq 6 ]] || { echo "Expected 6 preproduction application deployments at replicas=2, got $REPLICAS_2"; exit 1; }
             [[ "$PDB_MIN_1" -eq 6 ]] || { echo "Expected 6 preproduction PDBs at minAvailable=1, got $PDB_MIN_1"; exit 1; }
             [[ "$ANTI_AFFINITY" -eq 6 ]] || { echo "Expected required pod anti-affinity on 6 preproduction application deployments, got $ANTI_AFFINITY"; exit 1; }
@@ -130,6 +142,7 @@ jobs:
             ZONE_TOPOLOGY="$(grep -c '^[[:space:]]*topologyKey: topology.kubernetes.io/zone$' /tmp/wero-prod-rendered.yaml)"
             MIN_DOMAINS_3="$(grep -c '^[[:space:]]*minDomains: 3$' /tmp/wero-prod-rendered.yaml)"
 
+            EXPECT_REPLICAS_3=6
             EXPECT_HOST=6
             EXPECT_ZONE=6
             EXPECT_MIN_DOMAINS=6
@@ -143,7 +156,20 @@ jobs:
               EXPECT_MIN_DOMAINS=7
             fi
 
-            [[ "$REPLICAS_3" -eq 6 ]] || { echo "Expected 6 application deployments at replicas=3, got $REPLICAS_3"; exit 1; }
+            if grep -q '^kind: Redpanda$' /tmp/wero-prod-rendered.yaml; then
+              EXPECT_REPLICAS_3=7
+              grep -q '^  name: redpanda$' /tmp/wero-prod-rendered.yaml
+              ! grep -q '^  name: kafka$' /tmp/wero-prod-rendered.yaml
+              grep -q 'redpanda-0.redpanda.wero-poc-prod.svc.cluster.local:9093' /tmp/wero-prod-rendered.yaml
+              [[ "$(grep -c '^[[:space:]]*- name: KAFKA_SECURITY_PROTOCOL$' /tmp/wero-prod-rendered.yaml)" -eq 2 ]]
+              [[ "$(grep -c '^[[:space:]]*value: SASL_SSL$' /tmp/wero-prod-rendered.yaml)" -eq 2 ]]
+              [[ "$(grep -c '^[[:space:]]*value: SCRAM-SHA-512$' /tmp/wero-prod-rendered.yaml)" -eq 2 ]]
+              [[ "$(grep -c '^[[:space:]]*secretName: redpanda-client-ca$' /tmp/wero-prod-rendered.yaml)" -eq 2 ]]
+              grep -q '^[[:space:]]*name: redpanda-payment-producer$' /tmp/wero-prod-rendered.yaml
+              grep -q '^[[:space:]]*name: redpanda-event-audit-consumer$' /tmp/wero-prod-rendered.yaml
+            fi
+
+            [[ "$REPLICAS_3" -eq "$EXPECT_REPLICAS_3" ]] || { echo "Expected $EXPECT_REPLICAS_3 replicas=3 declarations in production target, got $REPLICAS_3"; exit 1; }
             [[ "$PDB_MIN_2" -eq 6 ]] || { echo "Expected 6 production PDBs at minAvailable=2, got $PDB_MIN_2"; exit 1; }
             [[ "$ANTI_AFFINITY" -eq 6 ]] || { echo "Expected required pod anti-affinity on 6 production application deployments, got $ANTI_AFFINITY"; exit 1; }
             [[ "$HOST_TOPOLOGY" -eq "$EXPECT_HOST" ]] || { echo "Expected $EXPECT_HOST hostname topology keys in production, got $HOST_TOPOLOGY"; exit 1; }
