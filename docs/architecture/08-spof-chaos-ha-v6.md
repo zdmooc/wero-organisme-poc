@@ -110,13 +110,13 @@ The Redpanda broker is still one ephemeral lab instance. B2 validates Outbox buf
 
 ## Phase B3 — Keycloak outage
 
-`tests/resilience/test-v6-keycloak-recovery.sh` passed:
+`tests/resilience/test-v6-keycloak-recovery.sh` passed repeatedly:
 
 - controlled Keycloak scale `1 -> 0` with temporary Argo self-heal suspension;
 - already-issued JWT remained usable during outage;
 - fresh token acquisition failed during outage;
-- token issuance recovered in **131 s**;
-- fresh-JWT authorization / JWK convergence recovered in **135 s**;
+- historical validation observed token issuance recovery in **131 s** and fresh-JWT authorization/JWK convergence in **135 s**;
+- final regression observed token issuance recovery in **120 s** and fresh-JWT authorization/JWK convergence in **124 s**;
 - Argo returned `Synced/Healthy`;
 - V4/V5 regression passed.
 
@@ -147,7 +147,7 @@ Detailed design: `docs/architecture/09-sct-inst-shared-state-v6-b4.md`.
 - settlement ledger contained **0 rows**;
 - Outbox contained `PAYMENT_CREATED`, `PAYMENT_PROCESSING`, `PAYMENT_UNKNOWN`;
 - same idempotency key during outage did not blindly resend;
-- Wero recovered to two replicas and Argo `Synced/Healthy` in **11 s**;
+- Wero recovered to two replicas and Argo `Synced/Healthy` in **11–12 s** on the final validation sequence;
 - same idempotency key after recovery still did not blindly resend;
 - reconciliation returned `railStatus=NOT_FOUND`, `afterStatus=UNKNOWN`;
 - V4/V5 regression passed afterward.
@@ -189,7 +189,7 @@ Observed CRC evidence:
 - exactly **1** settlement ledger row remained;
 - Outbox contained exactly **1** `PAYMENT_RECOVERY_STARTED` and **1** `PAYMENT_RECOVERED`;
 - repeated recovery returned `action=ALREADY_FINAL` and created no duplicate settlement;
-- Wero/EPI recovered in **11 s**.
+- final regression Wero/EPI recovery was **12 s**.
 
 Detailed design and B5/B6 evidence: `docs/architecture/10-wero-outage-controlled-recovery-v6-b5-b6.md`.
 
@@ -197,12 +197,17 @@ Detailed design and B5/B6 evidence: `docs/architecture/10-wero-outage-controlled
 
 `tests/resilience/test-v6-concurrent-recovery.sh` passed with `V6 OK (phase B7)`.
 
-Eight recovery requests were released simultaneously for the same pre-rail `UNKNOWN` payment through the API Gateway. Observed actions:
+Eight recovery requests were released simultaneously for the same pre-rail `UNKNOWN` payment through the API Gateway.
+
+Final validation run observed:
 
 - `RESUBMITTED = 1`;
-- `RECOVERY_ALREADY_CLAIMED = 1`;
-- `RECOVERY_ALREADY_IN_PROGRESS = 6`;
+- `RECOVERY_ALREADY_CLAIMED = 2`;
+- `RECOVERY_ALREADY_IN_PROGRESS = 5`;
+- `RECONCILED_WITHOUT_RESUBMIT = 0`;
 - `ALREADY_FINAL = 0`.
+
+A previous concurrent run also exercised the safe rail-race branch `RECONCILED_WITHOUT_RESUBMIT = 1`: one request observed the settlement already written by the winning resubmission and reconciled it without another rail submission. The business invariants remained single-instance.
 
 Final invariants:
 
@@ -214,19 +219,19 @@ Final invariants:
 - `PAYMENT_SETTLED = 1`;
 - `PAYMENT_RECOVERY_FAILED = 0`.
 
-This validates concurrent exclusion of the conditional database claim on CRC. It does not prove node/zone/site HA.
+This validates concurrent exclusion of the conditional database claim on CRC, including the safe post-settlement reconciliation race. It does not prove node/zone/site HA.
 
 Detailed evidence: `docs/architecture/11-concurrent-controlled-recovery-v6-b7.md`.
 
 ## Phase B8 — degraded modes
 
-`tests/resilience/test-v6-degraded-modes.sh` passed twice with `V6 OK (phase B8)`.
+`tests/resilience/test-v6-degraded-modes.sh` passed **three times** with `V6 OK (phase B8)`.
 
 The full degraded-mode matrix combines B1 PostgreSQL, B2 Kafka/Outbox, B3 Keycloak, B5 Wero/EPI and the two full-outage experiments added by B8.
 
 ### Full SCT Inst outage
 
-Observed on both runs:
+Observed on all validation runs:
 
 - `mock-sct-inst` scaled `2 -> 0`;
 - payment became `UNKNOWN`;
@@ -237,11 +242,11 @@ Observed on both runs:
 - explicit controlled recovery produced one `RESUBMITTED -> SETTLED`;
 - final rail rows = 1 and settlement ledger rows = 1.
 
-Observed recovery times: **14 s** then **12 s**.
+Observed recovery times: **14 s**, **12 s**, then **11 s** on the final regression run.
 
 ### Full API Gateway outage
 
-Observed on both runs:
+Observed on all validation runs:
 
 - `api-gateway` scaled `2 -> 0`;
 - public read/create requests were unavailable (`503` or curl `000` depending timing);
@@ -249,19 +254,27 @@ Observed on both runs:
 - after Gateway recovery, the untouched authorized intent was retried;
 - payment reached `SETTLED` exactly once.
 
-Observed recovery times: **16 s** then **11 s**.
+Observed recovery times: **16 s**, **11 s**, then **12 s** on the final regression run.
 
 Detailed matrix: `docs/architecture/12-degraded-modes-v6-b8.md`.
 
-## Final CRC gate
+## Final CRC gate — validated
 
-Phase B is fully validated on CRC. V6 CRC is not yet declared complete until one final full regression confirms the post-chaos baseline:
+The final post-chaos convergence gate passed on the V6 branch:
 
-- V4 business + observability regression passes;
-- V5 GitOps regression passes;
-- V6 Phase A and B1-B8 evidence/scripts remain present and the current runtime is `Synced/Healthy`;
-- all expected N+1 deployments are available;
-- no durable desired-state drift remains.
+- V4 business + observability regression: **`V4 OK`**;
+- V5 GitOps regression: **`V5 OK`**;
+- Argo CD Application `wero-poc-crc`: **`Synced / Healthy`**;
+- runtime revision aligned with the V6 branch;
+- all expected Git-managed deployments Ready;
+- N+1 workloads at **2/2**;
+- API Gateway drift test self-healed back to replicas=2;
+- Gateway dataplane returned HTTP 200;
+- final payment reached `SETTLED` with ledger, Kafka audit, Prometheus metric, Jaeger trace and Grafana healthy.
+
+The final runtime check also showed the expected Maven `target/` directories as local untracked build artifacts only; they are not part of the Git desired state and do not constitute runtime drift.
+
+**V6 CRC is technically complete.**
 
 ## Phase C — production HA target
 
@@ -275,6 +288,8 @@ CRC cannot validate this phase. Target topics remain:
 - clustered Keycloak with HA backing database;
 - resilient secrets/PKI/HSM dependencies where applicable;
 - multi-site recovery and tested runbooks.
+
+Phase C is a production architecture target and is **not a blocker for V6 CRC closure**.
 
 ## RTO / RPO evidence model
 
