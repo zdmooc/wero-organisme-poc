@@ -187,12 +187,12 @@ It renders and verifies:
 - no `kind: Secret` in rendered C5 desired state;
 - shell syntax of the C5 runtime runbook.
 
-Consolidation evidence before this document:
+Final consolidation evidence before C5 closure:
 
 ```text
-C5 workflow #6   SUCCESS
-C4 workflow #48  SUCCESS
-global CI #384   SUCCESS
+C5 workflow #12  SUCCESS
+C4 workflow #54  SUCCESS
+global CI #390   SUCCESS
 ```
 
 ## Runtime runbook scaffold
