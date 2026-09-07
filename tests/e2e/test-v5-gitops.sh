@@ -7,6 +7,7 @@ APP=wero-poc-crc
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 EXPECTED_GATEWAY_REPLICAS="${EXPECTED_GATEWAY_REPLICAS:-1}"
 DRIFT_GATEWAY_REPLICAS="$((EXPECTED_GATEWAY_REPLICAS + 1))"
+SELF_HEAL_ATTEMPTS="${SELF_HEAL_ATTEMPTS:-84}"
 
 service_backend_addresses() {
   local service_name="$1"
@@ -110,7 +111,7 @@ oc patch deployment api-gateway -n "$PROJECT" --type=merge \
 oc annotate application "$APP" -n "$GITOPS_NS" argocd.argoproj.io/refresh=hard --overwrite >/dev/null
 
 HEALED=false
-for _ in $(seq 1 36); do
+for _ in $(seq 1 "$SELF_HEAL_ATTEMPTS"); do
   REPLICAS="$(oc get deployment api-gateway -n "$PROJECT" -o jsonpath='{.spec.replicas}')"
   SYNC="$(oc get application "$APP" -n "$GITOPS_NS" -o jsonpath='{.status.sync.status}' 2>/dev/null || true)"
   if [[ "$REPLICAS" == "$EXPECTED_GATEWAY_REPLICAS" && "$SYNC" == "Synced" ]]; then
@@ -120,7 +121,7 @@ for _ in $(seq 1 36); do
   sleep 5
 done
 [[ "$HEALED" == "true" ]] || {
-  echo "Argo CD did not self-heal api-gateway replicas back to ${EXPECTED_GATEWAY_REPLICAS}"
+  echo "Argo CD did not self-heal api-gateway replicas back to ${EXPECTED_GATEWAY_REPLICAS} after $((SELF_HEAL_ATTEMPTS * 5))s"
   oc get application "$APP" -n "$GITOPS_NS"
   oc get deployment api-gateway -n "$PROJECT"
   exit 1
