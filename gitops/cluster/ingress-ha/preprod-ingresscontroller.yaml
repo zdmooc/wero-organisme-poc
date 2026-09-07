@@ -1,0 +1,23 @@
+apiVersion: operator.openshift.io/v1
+kind: IngressController
+metadata:
+  name: mayabank-preprod-public
+  namespace: openshift-ingress-operator
+  annotations:
+    architecture.mayabanque.io/status: target-not-runtime-validated
+    architecture.mayabanque.io/phase: v7-c5
+spec:
+  # Preproduction frontdoor target. Runtime worker/zone placement and external
+  # publication are environment responsibilities and must be evidenced there.
+  replicas: 2
+
+  # Keep this shard isolated from unrelated lab/admin Routes.
+  routeSelector:
+    matchLabels:
+      ingress.mayabanque.io/shard: preprod-public
+
+  # Intentionally omitted in the provider-neutral scaffold:
+  # - domain: must be the real immutable environment DNS domain
+  # - defaultCertificate: must reference an environment-provisioned TLS Secret
+  # - endpointPublishingStrategy: depends on the real platform/LB design
+  # - nodePlacement: depends on verified worker/infra labels and tolerations
