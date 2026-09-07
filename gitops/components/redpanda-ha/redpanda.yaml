@@ -1,0 +1,43 @@
+apiVersion: cluster.redpanda.com/v1alpha2
+kind: Redpanda
+metadata:
+  name: redpanda
+  annotations:
+    architecture.mayabanque.io/status: target-not-crc-validated
+    architecture.mayabanque.io/capacity: sizing-required
+spec:
+  # Operator v25.1.1+ selects the bundled Helm chart from the Redpanda image
+  # version. The POC currently uses Redpanda v26.2.2 in its CRC lab.
+  clusterSpec:
+    image:
+      tag: v26.2.2
+
+    # Production readiness baseline: an odd quorum with at least three brokers.
+    statefulset:
+      replicas: 3
+
+    # Placeholder only. Redpanda requires persistent storage in production and
+    # documents a minimum StorageClass capability of 20Gi. Real capacity,
+    # StorageClass, IOPS and filesystem are environment sizing decisions.
+    storage:
+      persistentVolume:
+        enabled: true
+        size: 20Gi
+
+    # Rack awareness lets Redpanda place partition replicas across Kubernetes
+    # failure zones. It requires RBAC/service-account access to node metadata.
+    rackAwareness:
+      enabled: true
+      nodeAnnotation: topology.kubernetes.io/zone
+    serviceAccount:
+      create: true
+    rbac:
+      enabled: true
+
+    # Prevent newly-created business topics from silently falling back to RF=1.
+    # Existing topics must still be inspected/migrated explicitly.
+    config:
+      cluster:
+        enable_rack_awareness: true
+        default_topic_replications: 3
+        minimum_topic_replications: 3
