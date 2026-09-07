@@ -152,6 +152,22 @@ jobs:
             grep -q 'namespace: wero-poc-prod' /tmp/wero-prod-rendered.yaml
           fi
 
+      - name: Render and verify V7 Redpanda HA scaffold when present
+        run: |
+          if [[ -f gitops/components/redpanda-ha/kustomization.yaml ]]; then
+            /tmp/kustomize build gitops/components/redpanda-ha > /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^apiVersion: cluster.redpanda.com/v1alpha2$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^kind: Redpanda$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^  name: redpanda$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*tag: v26.2.2$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*replicas: 3$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*enabled: true$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*size: 20Gi$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*nodeAnnotation: topology.kubernetes.io/zone$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*default_topic_replications: 3$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*minimum_topic_replications: 3$' /tmp/wero-redpanda-ha-rendered.yaml
+          fi
+
       - name: Validate V7 production lab scripts
         run: |
           if [[ -f tests/production/test-v7-cnpg-failover.sh ]]; then
@@ -160,7 +176,7 @@ jobs:
 
       - name: Verify runtime Secrets are not part of rendered desired state
         run: |
-          for rendered in /tmp/wero-rendered.yaml /tmp/wero-preprod-rendered.yaml /tmp/wero-prod-rendered.yaml; do
+          for rendered in /tmp/wero-rendered.yaml /tmp/wero-preprod-rendered.yaml /tmp/wero-prod-rendered.yaml /tmp/wero-redpanda-ha-rendered.yaml; do
             [[ -f "$rendered" ]] || continue
             if grep -E '^[[:space:]]*kind:[[:space:]]*Secret[[:space:]]*$' "$rendered"; then
               echo "ERROR: Secret manifest found in rendered runtime desired state: $rendered"
