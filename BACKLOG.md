@@ -128,11 +128,20 @@
 - [ ] validation runtime multi-worker / multi-zone sur un environnement OpenShift adapté
 
 ### C2 — PostgreSQL HA
-- [ ] choisir l’architecture PostgreSQL HA selon les RPO/RTO métier
-- [ ] supprimer le modèle production single Deployment + PVC unique
-- [ ] failover contrôlé
-- [ ] sauvegarde / restauration / PITR
-- [ ] test de panne et mesure RTO/RPO
+- [x] architecture de référence CloudNativePG choisie ; politique sync/async laissée à la décision RPO/RTO C6
+- [x] composant CNPG `mayabank-postgresql` à 3 instances avec anti-affinity worker et secret applicatif externe à Git
+- [x] modèle lab `Deployment postgresql + PVC unique + Service postgresql` supprimé des rendus preprod/prod
+- [x] preprod : cluster CNPG 3 instances avec spread sur 2 zones
+- [x] prod : cluster CNPG 3 instances avec spread sur 3 zones
+- [x] `payment-service`, `event-audit-service` et `mock-sct-inst` pointent vers `mayabank-postgresql-rw` sans modification Java
+- [x] CI Kustomize vérifie le cluster CNPG, l’endpoint RW, l’absence de l’ancien PostgreSQL et l’absence de Secrets runtime
+- [x] lab C2-F1 de failover primaire ajouté dans `tests/production/test-v7-cnpg-failover.sh` et syntaxe validée par CI
+- [x] architecture backup / WAL / PITR définie avec Barman Cloud CNPG-I Plugin dans `docs/architecture/15-postgresql-backup-pitr-v7-c2.md`
+- [ ] sélectionner le provider object storage et créer l’`ObjectStore`, les credentials externes et le `ScheduledBackup`
+- [ ] exécuter C2-F1 sur OpenShift multi-worker et mesurer promotion/service RW + RTO
+- [ ] exécuter C2-F2/C2-F3/C2-F4 : perte worker, perte standby, switchover contrôlé
+- [ ] exécuter C2-F5 restore et C2-F6 PITR dans un cluster de récupération séparé
+- [ ] mesurer la fenêtre de perte éventuelle et mapper les preuves aux objectifs RPO/RTO C6
 
 ### C3 — Kafka/Redpanda HA
 - [ ] architecture multi-broker
