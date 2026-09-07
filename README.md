@@ -83,7 +83,7 @@ tests/               E2E, sécurité, observabilité, GitOps, résilience
 - V3B : API Gateway et isolation Zero Trust — validé CRC
 - V4 : observabilité E2E — validé CRC
 - V5 : GitOps / Kustomize / OpenShift GitOps / Argo CD — validé CRC
-- V6 : SPOF, chaos, HA et résilience — phases A, B1, B2, B3, B4, B5 et B6 validées CRC ; concurrence/idempotence B7 et modes dégradés B8 restent à valider
+- V6 : SPOF, chaos, HA et résilience — phases A, B1, B2, B3, B4, B5, B6 et B7 validées CRC ; seuls les modes dégradés B8 restent à valider avant clôture CRC
 - V7 : branchement optionnel à un sandbox externe lorsque possible
 
 ## V5 GitOps
@@ -106,7 +106,9 @@ La phase B5 a validé la panne Wero/EPI avant rail : le paiement passe `UNKNOWN`
 
 La phase B6 a validé la récupération explicite de ce cas pré-rail : confirmation opérateur obligatoire, preflight SCT Inst `NOT_FOUND`, claim atomique local `UNKNOWN -> RECOVERY_PENDING`, puis une seule resoumission contrôlée. Le test CRC a observé `RESUBMITTED -> SETTLED`, exactement une ligne rail, un settlement ledger, un événement `PAYMENT_RECOVERY_STARTED`, un événement `PAYMENT_RECOVERED`, puis `ALREADY_FINAL` sur une nouvelle demande de recovery. Wero/EPI a récupéré en 11 s. Aucun `UNKNOWN` arbitraire n’est automatiquement rejoué.
 
-Les deux éléments Phase B encore ouverts sont la concurrence/idempotence réelle de plusieurs recoveries simultanées (B7) et la formalisation/test des modes dégradés (B8).
+La phase B7 a validé l’exclusion concurrente réelle : **8 recoveries simultanées** ont produit exactement **1 `RESUBMITTED`**, **1 `RECOVERY_ALREADY_CLAIMED`** et **6 `RECOVERY_ALREADY_IN_PROGRESS`**. Le paiement final est `SETTLED` avec exactement une ligne rail, une écriture ledger settlement, un `PAYMENT_RECOVERY_STARTED`, un `PAYMENT_RECOVERED` et aucun doublon métier. Ce résultat valide l’exclusion par claim DB sur CRC, pas une HA de nœud/zone/site.
+
+Le seul élément Phase B encore ouvert est la formalisation et le test des modes dégradés B8.
 
 PostgreSQL, Kafka/Redpanda et Keycloak restent des dépendances mono-instance dans ce lab. CRC étant mono-nœud, ces validations couvrent des pannes de pod/processus et des indisponibilités contrôlées, pas une panne de nœud, zone ou site.
 
@@ -114,3 +116,4 @@ Voir :
 - `docs/architecture/08-spof-chaos-ha-v6.md`
 - `docs/architecture/09-sct-inst-shared-state-v6-b4.md`
 - `docs/architecture/10-wero-outage-controlled-recovery-v6-b5-b6.md`
+- `docs/architecture/11-concurrent-controlled-recovery-v6-b7.md`
