@@ -29,12 +29,12 @@ V6 distinguishes:
 
 | Component | V5 | Current V6 CRC | V6 treatment |
 |---|---:|---:|---|
-| API Gateway | 1 | 2 | N+1 + PDB + pod-kill |
-| Payment Service | 1 | 2 | N+1 + PDB + pod-kill |
+| API Gateway | 1 | 2 | N+1 + PDB + pod-kill + full outage/recovery B8 |
+| Payment Service | 1 | 2 | N+1 + PDB + pod-kill + concurrent recovery claim B7 |
 | Consumer PSP | 1 | 2 | N+1 + PDB + pod-kill |
 | Event Audit | 1 | 2 | N+1 + PDB + pod-kill |
 | Wero/EPI mock | 1 | 2 | N+1 + PDB + outage tests |
-| SCT Inst mock | 1 | 2 | PostgreSQL shared settlement state + PDB + inter-pod failover |
+| SCT Inst mock | 1 | 2 | PostgreSQL shared settlement state + PDB + inter-pod failover + full outage B8 |
 | PostgreSQL | 1 | 1 | pod recovery on same PVC validated; still a single-instance dependency |
 | Redpanda/Kafka | 1 | 1 | Outbox buffering/replay validated; broker still single-instance and ephemeral |
 | Keycloak | 1 | 1 | degraded JWT mode + recovery measured; still single-instance |
@@ -191,22 +191,77 @@ Observed CRC evidence:
 - repeated recovery returned `action=ALREADY_FINAL` and created no duplicate settlement;
 - Wero/EPI recovered in **11 s**.
 
-Recovery Outbox evidence:
-
-- `PAYMENT_RECOVERY_STARTED`;
-- `PAYMENT_RECOVERED` for a known recovery result;
-- `PAYMENT_RECOVERY_FAILED` if the controlled attempt becomes uncertain again.
-
 Detailed design and B5/B6 evidence: `docs/architecture/10-wero-outage-controlled-recovery-v6-b5-b6.md`.
 
-This is an educational controlled-recovery mechanism. It is not permission to automatically retry arbitrary `UNKNOWN` payments.
+## Phase B7 — concurrent controlled recovery
 
-## Remaining Phase B work
+`tests/resilience/test-v6-concurrent-recovery.sh` passed with `V6 OK (phase B7)`.
 
-Before V6 CRC can be considered complete, two Phase B items remain:
+Eight recovery requests were released simultaneously for the same pre-rail `UNKNOWN` payment through the API Gateway. Observed actions:
 
-1. **B7 — concurrent retry/idempotence**: multiple simultaneous recovery requests for the same `paymentId` must prove that only one replica claims `UNKNOWN -> RECOVERY_PENDING`, only one rail resubmission occurs and no duplicate business Outbox or settlement is created;
-2. **B8 — degraded modes**: formalize and test the behavior of Wero/EPI, SCT Inst, PostgreSQL, Kafka, Keycloak and API Gateway outages, including service/read/create policy, business state, retry/reconciliation rule, observed RTO and duplication risk.
+- `RESUBMITTED = 1`;
+- `RECOVERY_ALREADY_CLAIMED = 1`;
+- `RECOVERY_ALREADY_IN_PROGRESS = 6`;
+- `ALREADY_FINAL = 0`.
+
+Final invariants:
+
+- payment `SETTLED`;
+- SCT Inst rail rows = **1**;
+- settlement ledger rows = **1**;
+- `PAYMENT_RECOVERY_STARTED = 1`;
+- `PAYMENT_RECOVERED = 1`;
+- `PAYMENT_SETTLED = 1`;
+- `PAYMENT_RECOVERY_FAILED = 0`.
+
+This validates concurrent exclusion of the conditional database claim on CRC. It does not prove node/zone/site HA.
+
+Detailed evidence: `docs/architecture/11-concurrent-controlled-recovery-v6-b7.md`.
+
+## Phase B8 — degraded modes
+
+`tests/resilience/test-v6-degraded-modes.sh` passed twice with `V6 OK (phase B8)`.
+
+The full degraded-mode matrix combines B1 PostgreSQL, B2 Kafka/Outbox, B3 Keycloak, B5 Wero/EPI and the two full-outage experiments added by B8.
+
+### Full SCT Inst outage
+
+Observed on both runs:
+
+- `mock-sct-inst` scaled `2 -> 0`;
+- payment became `UNKNOWN`;
+- rail rows = 0;
+- settlement ledger rows = 0;
+- same idempotency key caused no blind replay;
+- after SCT Inst recovery, reconciliation returned `NOT_FOUND -> UNKNOWN`;
+- explicit controlled recovery produced one `RESUBMITTED -> SETTLED`;
+- final rail rows = 1 and settlement ledger rows = 1.
+
+Observed recovery times: **14 s** then **12 s**.
+
+### Full API Gateway outage
+
+Observed on both runs:
+
+- `api-gateway` scaled `2 -> 0`;
+- public read/create requests were unavailable (`503` or curl `000` depending timing);
+- no payment/rail/ledger side effect was produced by the blocked create;
+- after Gateway recovery, the untouched authorized intent was retried;
+- payment reached `SETTLED` exactly once.
+
+Observed recovery times: **16 s** then **11 s**.
+
+Detailed matrix: `docs/architecture/12-degraded-modes-v6-b8.md`.
+
+## Final CRC gate
+
+Phase B is fully validated on CRC. V6 CRC is not yet declared complete until one final full regression confirms the post-chaos baseline:
+
+- V4 business + observability regression passes;
+- V5 GitOps regression passes;
+- V6 Phase A and B1-B8 evidence/scripts remain present and the current runtime is `Synced/Healthy`;
+- all expected N+1 deployments are available;
+- no durable desired-state drift remains.
 
 ## Phase C — production HA target
 
