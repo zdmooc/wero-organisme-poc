@@ -99,14 +99,15 @@
 - [x] validation runtime Keycloak outage/recovery (`V6 OK (phase B3)`, JWT existant utilisable, nouveau token indisponible pendant panne, token recovery 131 s, autorisation JWT/JWK 135 s)
 - [x] externaliser l’état `mock-sct-inst` dans PostgreSQL partagé
 - [x] passer `mock-sct-inst` à 2 replicas + PDB `minAvailable=1`
-- [x] validation failover inter-pods SCT Inst (`V6 OK (phase B4)`: POST sur pod A, suppression pod A, GET/reconcile sur pod B, même `settlementId`, 1 rail row, 1 settlement ledger)
+- [x] validation failover inter-pods SCT Inst (`V6 OK (phase B4)`: POST sur pod A, suppression pod A, GET/reconcile sur pod B, même `settlementId`, 1 rail row, 1 ledger settlement)
 - [x] test panne Wero/EPI avant rail + `UNKNOWN` + anti-blind-replay ajouté
 - [x] validation runtime Wero/EPI outage (`V6 OK (phase B5)`: `UNKNOWN`, rail=0, ledger=0, anti-blind-replay, Wero recovery 11 s, reconcile `NOT_FOUND -> UNKNOWN`, V4/V5 OK)
 - [x] définir la politique de récupération contrôlée d’un `UNKNOWN` pré-rail : confirmation explicite + preflight rail `NOT_FOUND` + claim local exclusif avant resoumission
 - [x] implémentation récupération contrôlée + état `RECOVERY_PENDING` + endpoint gateway + test B6 ajoutés
 - [x] validation runtime récupération contrôlée (`V6 OK (phase B6)`: preflight `NOT_FOUND`, `RESUBMITTED -> SETTLED`, 1 rail row, 1 settlement ledger, `PAYMENT_RECOVERY_STARTED=1`, `PAYMENT_RECOVERED=1`, second recovery `ALREADY_FINAL`, Wero recovery 11 s)
 - [x] tests retry/idempotence concurrente sous panne (`V6 OK (phase B7)`: 8 recoveries simultanées sur le même `paymentId`, exactement 1 `RESUBMITTED`, 1 `RECOVERY_ALREADY_CLAIMED`, 6 `RECOVERY_ALREADY_IN_PROGRESS`, 1 rail row, 1 settlement ledger, 1 `PAYMENT_RECOVERY_STARTED`, 1 `PAYMENT_RECOVERED`, 0 duplication)
-- [ ] modes dégradés
+- [x] modes dégradés (`V6 OK (phase B8)` deux exécutions CRC : SCT Inst complet `2 -> 0` donne `UNKNOWN`, rail=0, ledger=0, aucun blind replay, reconcile `NOT_FOUND -> UNKNOWN`, recovery contrôlée unique ; RTO observé 14 s puis 12 s. API Gateway complet `2 -> 0` rend reads/creates indisponibles sans side effect backend, puis retry intact `SETTLED` une fois ; RTO observé 16 s puis 11 s)
+- [ ] régression finale V4/V5/V6 avant clôture CRC
 
 ### Phase C — cible HA production
 - [ ] anti-affinity/topology spread multi-node
