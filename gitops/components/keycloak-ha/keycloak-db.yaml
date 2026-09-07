@@ -1,0 +1,40 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: mayabank-keycloak-postgresql
+  annotations:
+    architecture.mayabanque.io/status: target-not-runtime-validated
+    architecture.mayabanque.io/capacity: placeholder-requires-sizing
+spec:
+  # Dedicated IAM database: keep Keycloak persistence isolated from the
+  # payment/ledger/outbox PostgreSQL failure domain.
+  instances: 3
+  enableSuperuserAccess: false
+
+  bootstrap:
+    initdb:
+      database: keycloak
+      owner: keycloak
+      dataChecksums: true
+      secret:
+        # kubernetes.io/basic-auth Secret provisioned outside Git.
+        name: keycloak-db
+
+  # Placeholder only. StorageClass and capacity are target-environment choices.
+  storage:
+    size: 10Gi
+
+  # One PostgreSQL instance per worker. Zone spread is patched by each target
+  # overlay because preprod and prod expose different failure-domain counts.
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+    podAntiAffinityType: required
+
+  # IAM target: every commit must reach at least one standby before success.
+  # This is a durability configuration target, not evidence of achieved RPO=0.
+  postgresql:
+    synchronous:
+      method: any
+      number: 1
+      dataDurability: required
