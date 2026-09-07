@@ -1,0 +1,15 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mayabank-keycloak
+  annotations:
+    architecture.mayabanque.io/status: target-not-runtime-validated
+spec:
+  # Preprod baseline. Production patches this to minAvailable=2.
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: keycloak
+      app.kubernetes.io/managed-by: keycloak-operator
+      app.kubernetes.io/instance: mayabank-keycloak
+      app.kubernetes.io/component: server
