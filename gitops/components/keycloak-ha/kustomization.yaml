@@ -4,3 +4,4 @@ kind: Kustomization
 resources:
   - keycloak-db.yaml
   - keycloak.yaml
+  - pdb.yaml
