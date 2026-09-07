@@ -83,9 +83,10 @@ RESUBMITTED="$(grep -c '^"action":"RESUBMITTED"$' "$ACTIONS_FILE" || true)"
 CLAIMED="$(grep -c '^"action":"RECOVERY_ALREADY_CLAIMED"$' "$ACTIONS_FILE" || true)"
 IN_PROGRESS="$(grep -c '^"action":"RECOVERY_ALREADY_IN_PROGRESS"$' "$ACTIONS_FILE" || true)"
 ALREADY_FINAL="$(grep -c '^"action":"ALREADY_FINAL"$' "$ACTIONS_FILE" || true)"
-SAFE_LOSERS="$((CLAIMED + IN_PROGRESS + ALREADY_FINAL))"
+RECONCILED="$(grep -c '^"action":"RECONCILED_WITHOUT_RESUBMIT"$' "$ACTIONS_FILE" || true)"
+SAFE_LOSERS="$((CLAIMED + IN_PROGRESS + ALREADY_FINAL + RECONCILED))"
 
-echo "actions: total=${TOTAL_ACTIONS} resubmitted=${RESUBMITTED} alreadyClaimed=${CLAIMED} inProgress=${IN_PROGRESS} alreadyFinal=${ALREADY_FINAL}"
+echo "actions: total=${TOTAL_ACTIONS} resubmitted=${RESUBMITTED} alreadyClaimed=${CLAIMED} inProgress=${IN_PROGRESS} alreadyFinal=${ALREADY_FINAL} reconciledWithoutResubmit=${RECONCILED}"
 [[ "$TOTAL_ACTIONS" == "$CONCURRENCY" ]] || exit 1
 [[ "$RESUBMITTED" == "1" ]] || { echo "Expected exactly one RESUBMITTED"; exit 1; }
 [[ "$SAFE_LOSERS" == "$((CONCURRENCY - 1))" ]] || { echo "Unexpected concurrent action"; cat "$ACTIONS_FILE"; exit 1; }
@@ -99,4 +100,4 @@ assert_count 1 "select count(*) from outbox_events where aggregate_id='${PAYMENT
 assert_count 1 "select count(*) from outbox_events where aggregate_id='${PAYMENT_ID}' and event_type='PAYMENT_SETTLED';" "PAYMENT_SETTLED"
 assert_count 0 "select count(*) from outbox_events where aggregate_id='${PAYMENT_ID}' and event_type='PAYMENT_RECOVERY_FAILED';" "PAYMENT_RECOVERY_FAILED"
 
-echo "V6 OK (phase B7): ${CONCURRENCY} simultaneous recovery requests produced exactly one RESUBMITTED and ${SAFE_LOSERS} safe losing calls; final SETTLED state has one rail row, one settlement ledger, one recovery-started event and one recovered event. This validates concurrent database-claim exclusion on CRC, not node/zone/site HA."
+echo "V6 OK (phase B7): ${CONCURRENCY} simultaneous recovery requests produced exactly one RESUBMITTED and ${SAFE_LOSERS} safe losing calls, including an optional rail reconciliation that observes the winner's settlement without resubmitting; final SETTLED state has one rail row, one settlement ledger, one recovery-started event and one recovered event. This validates concurrent database-claim exclusion on CRC, not node/zone/site HA."
