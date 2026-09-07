@@ -148,14 +148,21 @@
 - [x] scaffold `cluster.redpanda.com/v1alpha2` / `Redpanda` créé pour Redpanda `v26.2.2`
 - [x] cible 3 brokers, PVC persistants `20Gi` placeholder et rack awareness `topology.kubernetes.io/zone`
 - [x] politique cible `default_topic_replications=3` et `minimum_topic_replications=3`
-- [x] composant Kustomize autonome `gitops/components/redpanda-ha` rendu et contrôlé par CI
-- [x] CRC et overlays preprod/prod laissés inchangés tant que la migration TLS/SASL/bootstrap n’est pas définie
-- [ ] définir TLS/SASL/ACL et cycle de certificats/credentials hors Git
-- [ ] définir et valider le bootstrap Kafka interne pour `payment-service` et `event-audit-service` sans modification Java
-- [ ] brancher le composant Redpanda HA dans preprod/prod et supprimer le `Deployment/Service kafka` du lab dans ces overlays
-- [ ] vérifier/créer/migrer réellement `payment-events` avec replication factor 3
-- [ ] définir/valider la politique producer `acks=all` selon latence et disponibilité C6
-- [ ] ajouter les labs C3-F1/F2/F3/F4 : broker, worker, zone et decommission
+- [x] TLS activé, SASL/SCRAM activé, Admin API authentifiée et secrets/certificats référencés hors Git
+- [x] `Topic/payment-events` défini à 3 partitions, replication factor 3 et `min.insync.replicas=2`
+- [x] identités least-privilege `payment-producer` et `event-audit-consumer` avec ACL topic/group déclarées
+- [x] contrat CA/credentials/bootstrap documenté dans `docs/architecture/17-redpanda-security-clients-v7-c3.md`
+- [x] `payment-service` et `event-audit-service` transmettent les propriétés TLS/SASL à leurs clients Kafka construits manuellement ; CRC conserve `PLAINTEXT` par défaut
+- [x] producer Outbox conserve `acks=all`, idempotence Kafka et clé `paymentId` pour l’ordre par paiement
+- [x] preprod inclut Redpanda HA sécurisé et supprime le `Deployment/Service kafka` du lab
+- [x] prod inclut Redpanda HA sécurisé et supprime le `Deployment/Service kafka` du lab
+- [x] CI vérifie CRC séparément, Redpanda HA, TLS/SASL, topic RF3/minISR2, users/ACL, overlays preprod/prod et absence de `Secret` runtime
+- [x] compilation CI réussie pour les deux composants Java modifiés : `services/payment-service` et `services/event-audit-service`
+- [ ] provisionner réellement `redpanda-superusers`, les deux secrets SCRAM/JAAS et `redpanda-client-ca` sur l’environnement cible
+- [ ] vérifier en runtime `payment-events` : 3 partitions, RF=3, ISR sain et placement des replicas
+- [ ] valider en runtime authentification, refus de mauvais credentials et ACL least-privilege
+- [ ] valider latence/disponibilité de `acks=all` contre les objectifs C6
+- [ ] ajouter les labs C3-F1/F2/F3/F4 : perte broker, perte worker, perte zone et decommission
 - [ ] exécuter les pannes et mesurer leaderless/under-replicated partitions, RTO, Outbox pending et consumer lag
 - [ ] confirmer la continuité Outbox / audit et l’absence de duplication logique sous défaillance broker
 - [ ] mapper la stratégie DR Redpanda à C7
