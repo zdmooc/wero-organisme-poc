@@ -186,11 +186,27 @@
 - [ ] vérifier sous panne login/session/refresh-token, OIDC discovery, JWK et cohérence des clés de signature
 - [ ] mesurer IAM RTO/RPO observés et mapper les critères d’acceptation à C6
 
-### C5 — Ingress / LB / DNS HA
-- [ ] routers/ingress HA
-- [ ] load balancer multi-failure-domain
-- [ ] DNS / health checks / certificats
-- [ ] test perte d’un point d’entrée
+### C5 — Ingress / LB / DNS / TLS HA
+- [x] architecture provider-neutral documentée dans `docs/architecture/20-ingress-lb-dns-tls-ha-v7-c5.md`
+- [x] implémentation C5 documentée dans `docs/architecture/21-ingress-lb-dns-tls-ha-v7-c5-implementation.md`
+- [x] IngressController public preprod : 2 routers, shard `preprod-public`
+- [x] IngressController public prod : 3 routers, shard `prod-public`
+- [x] `domain`, `defaultCertificate`, `endpointPublishingStrategy` et `nodePlacement` laissés explicitement à l’environnement réel au lieu d’être inventés
+- [x] composant `gitops/components/frontdoor-ha` limité à `api-gateway-public` et `keycloak-public`
+- [x] Routes lab/admin `api-gateway`, `jaeger`, `prometheus`, `grafana` retirées des cibles C5 ; observabilité non publique par défaut
+- [x] API Gateway public en TLS `edge` avec redirection HTTP -> HTTPS
+- [x] Keycloak public en TLS `reencrypt` vers le port HTTPS du Service
+- [x] certificat backend Keycloak provisionné par contrat OpenShift `service-ca` (`keycloak-service-tls`) sans `Secret` commité
+- [x] contrat interne C4 `http://keycloak:8080` conservé ; aucun changement Java ni rebuild applicatif spécifique C5
+- [x] overlays C5 dédiés `gitops/overlays/preprod-c5` et `gitops/overlays/prod-c5` superposés aux cibles C1-C4
+- [x] CI dédiée `.github/workflows/ci-v7-frontdoor.yml` vérifie ingress shards, Routes, TLS, service-ca, absence de hostname fictif et absence de `Secret`
+- [x] runbook C5-F1 `tests/production/test-v7-ingress-failover.sh` ajouté, dry-run par défaut, suppression d’un seul router pod sous opt-in explicite
+- [ ] choisir/provisionner sur le vrai environnement le domaine ingress, les hostnames API/Keycloak, la stratégie de publication/LB, les certificats publics et le node placement
+- [ ] finaliser la NetworkPolicy Keycloak avec les vrais labels du chemin ingress et l’accès admin observabilité
+- [ ] exécuter C5-F1 sur un environnement multi-router et mesurer le RTO public API/OIDC
+- [ ] exécuter C5-F2/F3/F4/F5/F6 : perte worker, perte zone, cible LB, rotation certificat et DNS/failover si applicable
+- [ ] vérifier issuer/OIDC discovery/token/JWK Keycloak via le vrai hostname HTTPS et mesurer les fenêtres d’erreur
+- [ ] mapper les preuves C5 aux objectifs RTO/RPO C6
 
 ### C6 — RTO/RPO métier
 - [ ] définir RTO/RPO par capacité de paiement
