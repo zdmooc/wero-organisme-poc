@@ -156,7 +156,7 @@ This proves the conservative default: an `UNKNOWN` is not automatically converte
 
 ## Phase B6 — controlled pre-rail UNKNOWN recovery
 
-B6 is implemented and awaiting CRC runtime validation.
+`tests/resilience/test-v6-controlled-recovery.sh` passed with `V6 OK (phase B6)`.
 
 Endpoint:
 
@@ -179,17 +179,34 @@ Safety gates:
 9. final state, ledger and Outbox are committed after the remote result;
 10. repeating recovery against a final payment is a no-op.
 
+Observed CRC evidence:
+
+- genuine pre-rail payment reached local `UNKNOWN` with no SCT Inst row and no settlement ledger;
+- after Wero/EPI recovery, reconciliation returned `railStatus=NOT_FOUND`, `afterStatus=UNKNOWN`;
+- invalid recovery confirmation was rejected before reaching the rail;
+- explicit recovery returned `railStatusBefore=NOT_FOUND`, `action=RESUBMITTED`, `afterStatus=SETTLED`;
+- exactly **1** SCT Inst rail row remained;
+- exactly **1** settlement ledger row remained;
+- Outbox contained exactly **1** `PAYMENT_RECOVERY_STARTED` and **1** `PAYMENT_RECOVERED`;
+- repeated recovery returned `action=ALREADY_FINAL` and created no duplicate settlement;
+- Wero/EPI recovered in **11 s**.
+
 Recovery Outbox evidence:
 
 - `PAYMENT_RECOVERY_STARTED`;
 - `PAYMENT_RECOVERED` for a known recovery result;
 - `PAYMENT_RECOVERY_FAILED` if the controlled attempt becomes uncertain again.
 
-Test: `tests/resilience/test-v6-controlled-recovery.sh`.
-
-Detailed design and B5 evidence: `docs/architecture/10-wero-outage-controlled-recovery-v6-b5-b6.md`.
+Detailed design and B5/B6 evidence: `docs/architecture/10-wero-outage-controlled-recovery-v6-b5-b6.md`.
 
 This is an educational controlled-recovery mechanism. It is not permission to automatically retry arbitrary `UNKNOWN` payments.
+
+## Remaining Phase B work
+
+Before V6 CRC can be considered complete, two Phase B items remain:
+
+1. **B7 — concurrent retry/idempotence**: multiple simultaneous recovery requests for the same `paymentId` must prove that only one replica claims `UNKNOWN -> RECOVERY_PENDING`, only one rail resubmission occurs and no duplicate business Outbox or settlement is created;
+2. **B8 — degraded modes**: formalize and test the behavior of Wero/EPI, SCT Inst, PostgreSQL, Kafka, Keycloak and API Gateway outages, including service/read/create policy, business state, retry/reconciliation rule, observed RTO and duplication risk.
 
 ## Phase C — production HA target
 
