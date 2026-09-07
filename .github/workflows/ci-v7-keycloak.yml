@@ -49,7 +49,7 @@ jobs:
             if ! grep -qF "$needle" /tmp/wero-keycloak-ha.yaml; then
               echo "ERROR: missing C4 invariant: $label ($needle)"
               echo '--- rendered C4 diagnostic ---'
-              grep -nE 'apiVersion:|kind:|name: mayabank-keycloak|instances:|vendor:|host:|database:|key:|enabled:|strategy:|metrics-enabled|topologyKey:' /tmp/wero-keycloak-ha.yaml || true
+              grep -nE 'apiVersion:|kind:|name: mayabank-keycloak|instances:|vendor:|host:|database:|key:|enabled:|serviceName:|serviceHttpPort:|httpEnabled:|strategy:|metrics-enabled|topologyKey:|minAvailable:' /tmp/wero-keycloak-ha.yaml || true
               exit 1
             fi
           }
@@ -63,11 +63,24 @@ jobs:
           check_fixed 'database: keycloak' 'Keycloak database name'
           check_fixed 'key: username' 'DB username Secret key'
           check_fixed 'key: password' 'DB password Secret key'
+          check_fixed 'httpEnabled: true' 'stable internal HTTP compatibility'
+          check_fixed 'serviceHttpPort: 8080' 'stable internal Service port'
+          check_fixed 'serviceName: keycloak' 'stable internal Service name'
           check_fixed 'enabled: false' 'operator ingress disabled until C5'
           check_fixed 'requiredDuringSchedulingIgnoredDuringExecution:' 'required worker anti-affinity'
           check_fixed 'topologyKey: topology.kubernetes.io/zone' 'zone topology spread'
           check_fixed 'strategy: Auto' 'operator rolling-update strategy'
           check_fixed 'name: metrics-enabled' 'Keycloak metrics option'
+
+      - name: Verify explicit Keycloak PDB
+        run: |
+          grep -q '^kind: PodDisruptionBudget$' /tmp/wero-keycloak-ha.yaml
+          grep -q '^  name: mayabank-keycloak$' /tmp/wero-keycloak-ha.yaml
+          grep -q '^[[:space:]]*minAvailable: 1$' /tmp/wero-keycloak-ha.yaml
+          grep -q '^[[:space:]]*app: keycloak$' /tmp/wero-keycloak-ha.yaml
+          grep -q '^[[:space:]]*app.kubernetes.io/managed-by: keycloak-operator$' /tmp/wero-keycloak-ha.yaml
+          grep -q '^[[:space:]]*app.kubernetes.io/instance: mayabank-keycloak$' /tmp/wero-keycloak-ha.yaml
+          grep -q '^[[:space:]]*app.kubernetes.io/component: server$' /tmp/wero-keycloak-ha.yaml
 
       - name: Verify no runtime Secret manifest is committed
         run: |
