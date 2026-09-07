@@ -168,10 +168,23 @@
 - [ ] mapper la stratégie DR Redpanda à C7
 
 ### C4 — Keycloak HA
-- [ ] Keycloak multi-replicas
-- [ ] base Keycloak HA
-- [ ] sessions / cache / clés de signature
-- [ ] test perte pod / worker / zone IAM
+- [x] architecture Keycloak Operator `v2beta1` + production mode définie dans `docs/architecture/18-keycloak-ha-v7-c4.md`
+- [x] implémentation C4 documentée dans `docs/architecture/19-keycloak-ha-v7-c4-implementation.md`
+- [x] composant `gitops/components/keycloak-ha` créé : Keycloak, base IAM dédiée et PDB explicite
+- [x] preprod : 2 instances Keycloak, anti-affinity worker, spread 2 domaines workers/zones, PDB `minAvailable=1`
+- [x] prod : 3 instances Keycloak, anti-affinity worker, spread 3 domaines workers/zones, PDB `minAvailable=2`
+- [x] base IAM CloudNativePG dédiée `mayabank-keycloak-postgresql` à 3 instances, endpoint RW role-aware et cible synchrone vers 1 standby
+- [x] Secret DB `keycloak-db` référencé hors Git ; aucun credential runtime ajouté au desired state
+- [x] contrat OIDC interne `http://keycloak:8080` conservé via `spec.http.serviceName/serviceHttpPort`, donc aucun changement Java C4
+- [x] anciens `Deployment/Service/Route keycloak` du lab retirés des rendus preprod/prod ; CRC reste inchangé
+- [x] production mode / cache distribué Infinispan + découverte `jdbc-ping` documentés comme cible, sans prétendre à une preuve runtime
+- [x] bootstrap realm one-shot `gitops/bootstrap/keycloak/mayabanque-realm-import.yaml` ajouté hors overlays continus, sans mot de passe dans Git
+- [x] CI dédiée C4 + gate global contrôlent composant, preprod/prod, scheduling, PDB, service interne, DB IAM et absence de `Secret`
+- [ ] provisionner réellement Keycloak Operator/CRDs, `keycloak-db` et bootstrap admin externe sur l’environnement cible
+- [ ] finaliser C5 hostname/TLS/Route/LB/NetworkPolicy frontdoor avant exposition réelle
+- [ ] exécuter C4-F1/F2/F3/F4/F5/F6 sur OpenShift multi-worker/multi-zone
+- [ ] vérifier sous panne login/session/refresh-token, OIDC discovery, JWK et cohérence des clés de signature
+- [ ] mesurer IAM RTO/RPO observés et mapper les critères d’acceptation à C6
 
 ### C5 — Ingress / LB / DNS HA
 - [ ] routers/ingress HA
