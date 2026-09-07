@@ -181,7 +181,7 @@
 - [x] bootstrap realm one-shot `gitops/bootstrap/keycloak/mayabanque-realm-import.yaml` ajouté hors overlays continus, sans mot de passe dans Git
 - [x] CI dédiée C4 + gate global contrôlent composant, preprod/prod, scheduling, PDB, service interne, DB IAM et absence de `Secret`
 - [ ] provisionner réellement Keycloak Operator/CRDs, `keycloak-db` et bootstrap admin externe sur l’environnement cible
-- [ ] finaliser C5 hostname/TLS/Route/LB/NetworkPolicy frontdoor avant exposition réelle
+- [x] C5 frontdoor Git/render défini : Routes HTTPS, re-encrypt Keycloak et service-ca ; runtime DNS/LB/certificats/NetworkPolicy reste à provisionner
 - [ ] exécuter C4-F1/F2/F3/F4/F5/F6 sur OpenShift multi-worker/multi-zone
 - [ ] vérifier sous panne login/session/refresh-token, OIDC discovery, JWK et cohérence des clés de signature
 - [ ] mesurer IAM RTO/RPO observés et mapper les critères d’acceptation à C6
