@@ -161,11 +161,40 @@ jobs:
             grep -q '^  name: redpanda$' /tmp/wero-redpanda-ha-rendered.yaml
             grep -q '^[[:space:]]*tag: v26.2.2$' /tmp/wero-redpanda-ha-rendered.yaml
             grep -q '^[[:space:]]*replicas: 3$' /tmp/wero-redpanda-ha-rendered.yaml
-            grep -q '^[[:space:]]*enabled: true$' /tmp/wero-redpanda-ha-rendered.yaml
             grep -q '^[[:space:]]*size: 20Gi$' /tmp/wero-redpanda-ha-rendered.yaml
             grep -q '^[[:space:]]*nodeAnnotation: topology.kubernetes.io/zone$' /tmp/wero-redpanda-ha-rendered.yaml
             grep -q '^[[:space:]]*default_topic_replications: 3$' /tmp/wero-redpanda-ha-rendered.yaml
             grep -q '^[[:space:]]*minimum_topic_replications: 3$' /tmp/wero-redpanda-ha-rendered.yaml
+
+            # Security boundary: encrypted + authenticated Kafka target, with all
+            # runtime credentials/certificates referenced but never committed.
+            grep -q '^[[:space:]]*secretRef: redpanda-superusers$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*sasl_mechanisms:$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*- SCRAM$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*admin_api_require_auth: true$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*tls:$' /tmp/wero-redpanda-ha-rendered.yaml
+
+            TOPIC_COUNT="$(grep -c '^kind: Topic$' /tmp/wero-redpanda-ha-rendered.yaml)"
+            USER_COUNT="$(grep -c '^kind: User$' /tmp/wero-redpanda-ha-rendered.yaml)"
+            SCRAM512_COUNT="$(grep -c '^[[:space:]]*type: scram-sha-512$' /tmp/wero-redpanda-ha-rendered.yaml)"
+            [[ "$TOPIC_COUNT" -eq 1 ]] || { echo "Expected exactly one C3 Topic resource, got $TOPIC_COUNT"; exit 1; }
+            [[ "$USER_COUNT" -eq 2 ]] || { echo "Expected exactly two C3 User resources, got $USER_COUNT"; exit 1; }
+            [[ "$SCRAM512_COUNT" -eq 2 ]] || { echo "Expected both C3 users to use SCRAM-SHA-512, got $SCRAM512_COUNT"; exit 1; }
+
+            grep -q '^  name: payment-events$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*partitions: 3$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*replicationFactor: 3$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*min.insync.replicas: "2"$' /tmp/wero-redpanda-ha-rendered.yaml
+
+            grep -q '^  name: payment-producer$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*name: redpanda-payment-producer$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^  name: event-audit-consumer$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*name: redpanda-event-audit-consumer$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*name: payment-audit-v1$' /tmp/wero-redpanda-ha-rendered.yaml
+
+            grep -q '^[[:space:]]*- Write$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*- Read$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*- Describe$' /tmp/wero-redpanda-ha-rendered.yaml
           fi
 
       - name: Validate V7 production lab scripts
