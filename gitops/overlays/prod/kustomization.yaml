@@ -3,24 +3,24 @@ kind: Kustomization
 
 # Architecture target only until C2-C7 complete the stateful, IAM, ingress,
 # RTO/RPO and PRA design. This overlay is intentionally not wired to the CRC
-# Argo CD Application. CloudNativePG/Redpanda Operator CRDs, cert-manager and
-# runtime Secrets are environment prerequisites.
+# Argo CD Application. CloudNativePG/Redpanda/Keycloak Operator CRDs,
+# cert-manager and runtime Secrets are environment prerequisites.
 namespace: wero-poc-prod
 
 resources:
   - ../../base
   - ../../components/postgresql-ha
   - ../../components/redpanda-ha
+  - ../../components/keycloak-ha
 
 commonAnnotations:
   gitops.mayabanque.io/managed-by: argocd
   gitops.mayabanque.io/environment: prod
-  gitops.mayabanque.io/version: v7-c3
+  gitops.mayabanque.io/version: v7-c4
   architecture.mayabanque.io/status: target-not-crc-validated
 
 patches:
   # C2 removes the V6 single-instance PostgreSQL lab resources from production.
-  # CNPG owns independent PVCs and the role-aware RW Service instead.
   - target:
       group: apps
       version: v1
@@ -55,8 +55,7 @@ patches:
         name: postgresql
       $patch: delete
 
-  # C3 removes the V6 single-broker dev-container from production. Redpanda
-  # Operator owns the three-broker, TLS/SASL-enabled target.
+  # C3 removes the V6 single-broker dev-container from production.
   - target:
       group: apps
       version: v1
@@ -80,8 +79,44 @@ patches:
         name: kafka
       $patch: delete
 
-  # Production CNPG target: one primary plus two standby candidates, with
-  # required worker separation from the component and explicit 3-zone spread.
+  # C4 removes the V6 single-pod start-dev Keycloak resources. The Operator
+  # recreates the stable internal Service keycloak; C5 owns external ingress.
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: keycloak
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: keycloak
+      $patch: delete
+
+  - target:
+      version: v1
+      kind: Service
+      name: keycloak
+    patch: |-
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: keycloak
+      $patch: delete
+
+  - target:
+      group: route.openshift.io
+      version: v1
+      kind: Route
+      name: keycloak
+    patch: |-
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: keycloak
+      $patch: delete
+
+  # Production payment CNPG: one primary plus two standby candidates.
   - target:
       group: postgresql.cnpg.io
       version: v1
@@ -102,11 +137,46 @@ patches:
               matchLabels:
                 cnpg.io/cluster: mayabank-postgresql
 
-  # C1 production scheduling target for application workloads:
-  # - 3 replicas
-  # - replicas must land on distinct workers
-  # - replicas must be balanced across at least 3 zones
-  # CRC cannot validate these multi-node / multi-zone constraints.
+  # Dedicated Keycloak CNPG: three instances spread across three zones.
+  - target:
+      group: postgresql.cnpg.io
+      version: v1
+      kind: Cluster
+      name: mayabank-keycloak-postgresql
+    patch: |-
+      apiVersion: postgresql.cnpg.io/v1
+      kind: Cluster
+      metadata:
+        name: mayabank-keycloak-postgresql
+      spec:
+        topologySpreadConstraints:
+          - maxSkew: 1
+            minDomains: 3
+            topologyKey: topology.kubernetes.io/zone
+            whenUnsatisfiable: DoNotSchedule
+            labelSelector:
+              matchLabels:
+                cnpg.io/cluster: mayabank-keycloak-postgresql
+
+  # Production Keycloak: three server instances, distinct workers and at least
+  # three eligible worker/zone domains. PDB is patched below to minAvailable=2.
+  - target:
+      group: k8s.keycloak.org
+      version: v2beta1
+      kind: Keycloak
+      name: mayabank-keycloak
+    patch: |-
+      - op: replace
+        path: /spec/instances
+        value: 3
+      - op: add
+        path: /spec/scheduling/topologySpreadConstraints/0/minDomains
+        value: 3
+      - op: add
+        path: /spec/scheduling/topologySpreadConstraints/1/minDomains
+        value: 3
+
+  # C1 production scheduling target for application workloads.
   - target:
       group: apps
       version: v1
@@ -393,9 +463,7 @@ patches:
                     value: jdbc:postgresql://mayabank-postgresql-rw:5432/wero
 
   # With three application replicas, one voluntary disruption can be tolerated
-  # while keeping two replicas available. This does not protect against a zone
-  # failure by itself; the scheduler constraints above provide failure-domain
-  # placement and the later C2-C7 phases cover the remaining dependencies.
+  # while keeping two replicas available.
   - target:
       group: policy
       version: v1
@@ -471,5 +539,18 @@ patches:
       kind: PodDisruptionBudget
       metadata:
         name: mock-sct-inst
+      spec:
+        minAvailable: 2
+
+  - target:
+      group: policy
+      version: v1
+      kind: PodDisruptionBudget
+      name: mayabank-keycloak
+    patch: |-
+      apiVersion: policy/v1
+      kind: PodDisruptionBudget
+      metadata:
+        name: mayabank-keycloak
       spec:
         minAvailable: 2
