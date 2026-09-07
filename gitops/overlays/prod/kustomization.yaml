@@ -1,0 +1,284 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Architecture target only until C2-C7 complete the stateful, IAM, ingress,
+# RTO/RPO and PRA design. This overlay is intentionally not wired to the CRC
+# Argo CD Application.
+namespace: wero-poc-prod
+
+resources:
+  - ../../base
+
+commonAnnotations:
+  gitops.mayabanque.io/managed-by: argocd
+  gitops.mayabanque.io/environment: prod
+  gitops.mayabanque.io/version: v7-c1
+  architecture.mayabanque.io/status: target-not-crc-validated
+
+patches:
+  # C1 production scheduling target for application workloads:
+  # - 3 replicas
+  # - replicas must land on distinct workers
+  # - replicas must be balanced across at least 3 zones
+  # CRC cannot validate these multi-node / multi-zone constraints.
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: api-gateway
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: api-gateway
+      spec:
+        replicas: 3
+        template:
+          spec:
+            affinity:
+              podAntiAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  - labelSelector:
+                      matchLabels:
+                        app: api-gateway
+                    topologyKey: kubernetes.io/hostname
+            topologySpreadConstraints:
+              - maxSkew: 1
+                minDomains: 3
+                topologyKey: topology.kubernetes.io/zone
+                whenUnsatisfiable: DoNotSchedule
+                labelSelector:
+                  matchLabels:
+                    app: api-gateway
+
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: payment-service
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: payment-service
+      spec:
+        replicas: 3
+        template:
+          spec:
+            affinity:
+              podAntiAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  - labelSelector:
+                      matchLabels:
+                        app: payment-service
+                    topologyKey: kubernetes.io/hostname
+            topologySpreadConstraints:
+              - maxSkew: 1
+                minDomains: 3
+                topologyKey: topology.kubernetes.io/zone
+                whenUnsatisfiable: DoNotSchedule
+                labelSelector:
+                  matchLabels:
+                    app: payment-service
+
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: consumer-psp
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: consumer-psp
+      spec:
+        replicas: 3
+        template:
+          spec:
+            affinity:
+              podAntiAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  - labelSelector:
+                      matchLabels:
+                        app: consumer-psp
+                    topologyKey: kubernetes.io/hostname
+            topologySpreadConstraints:
+              - maxSkew: 1
+                minDomains: 3
+                topologyKey: topology.kubernetes.io/zone
+                whenUnsatisfiable: DoNotSchedule
+                labelSelector:
+                  matchLabels:
+                    app: consumer-psp
+
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: event-audit-service
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: event-audit-service
+      spec:
+        replicas: 3
+        template:
+          spec:
+            affinity:
+              podAntiAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  - labelSelector:
+                      matchLabels:
+                        app: event-audit-service
+                    topologyKey: kubernetes.io/hostname
+            topologySpreadConstraints:
+              - maxSkew: 1
+                minDomains: 3
+                topologyKey: topology.kubernetes.io/zone
+                whenUnsatisfiable: DoNotSchedule
+                labelSelector:
+                  matchLabels:
+                    app: event-audit-service
+
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: mock-wero
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: mock-wero
+      spec:
+        replicas: 3
+        template:
+          spec:
+            affinity:
+              podAntiAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  - labelSelector:
+                      matchLabels:
+                        app: mock-wero
+                    topologyKey: kubernetes.io/hostname
+            topologySpreadConstraints:
+              - maxSkew: 1
+                minDomains: 3
+                topologyKey: topology.kubernetes.io/zone
+                whenUnsatisfiable: DoNotSchedule
+                labelSelector:
+                  matchLabels:
+                    app: mock-wero
+
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: mock-sct-inst
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: mock-sct-inst
+      spec:
+        replicas: 3
+        template:
+          spec:
+            affinity:
+              podAntiAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  - labelSelector:
+                      matchLabels:
+                        app: mock-sct-inst
+                    topologyKey: kubernetes.io/hostname
+            topologySpreadConstraints:
+              - maxSkew: 1
+                minDomains: 3
+                topologyKey: topology.kubernetes.io/zone
+                whenUnsatisfiable: DoNotSchedule
+                labelSelector:
+                  matchLabels:
+                    app: mock-sct-inst
+
+  # With three application replicas, one voluntary disruption can be tolerated
+  # while keeping two replicas available. This does not protect against a zone
+  # failure by itself; the scheduler constraints above provide failure-domain
+  # placement and the later C2-C7 phases cover the remaining dependencies.
+  - target:
+      group: policy
+      version: v1
+      kind: PodDisruptionBudget
+      name: api-gateway
+    patch: |-
+      apiVersion: policy/v1
+      kind: PodDisruptionBudget
+      metadata:
+        name: api-gateway
+      spec:
+        minAvailable: 2
+
+  - target:
+      group: policy
+      version: v1
+      kind: PodDisruptionBudget
+      name: payment-service
+    patch: |-
+      apiVersion: policy/v1
+      kind: PodDisruptionBudget
+      metadata:
+        name: payment-service
+      spec:
+        minAvailable: 2
+
+  - target:
+      group: policy
+      version: v1
+      kind: PodDisruptionBudget
+      name: consumer-psp
+    patch: |-
+      apiVersion: policy/v1
+      kind: PodDisruptionBudget
+      metadata:
+        name: consumer-psp
+      spec:
+        minAvailable: 2
+
+  - target:
+      group: policy
+      version: v1
+      kind: PodDisruptionBudget
+      name: event-audit-service
+    patch: |-
+      apiVersion: policy/v1
+      kind: PodDisruptionBudget
+      metadata:
+        name: event-audit-service
+      spec:
+        minAvailable: 2
+
+  - target:
+      group: policy
+      version: v1
+      kind: PodDisruptionBudget
+      name: mock-wero
+    patch: |-
+      apiVersion: policy/v1
+      kind: PodDisruptionBudget
+      metadata:
+        name: mock-wero
+      spec:
+        minAvailable: 2
+
+  - target:
+      group: policy
+      version: v1
+      kind: PodDisruptionBudget
+      name: mock-sct-inst
+    patch: |-
+      apiVersion: policy/v1
+      kind: PodDisruptionBudget
+      metadata:
+        name: mock-sct-inst
+      spec:
+        minAvailable: 2
