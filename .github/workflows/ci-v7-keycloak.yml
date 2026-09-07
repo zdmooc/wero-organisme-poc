@@ -29,34 +29,45 @@ jobs:
 
       - name: Verify dedicated Keycloak CNPG database
         run: |
-          grep -q '^apiVersion: postgresql.cnpg.io/v1$' /tmp/wero-keycloak-ha.yaml
-          grep -q '^kind: Cluster$' /tmp/wero-keycloak-ha.yaml
-          grep -q '^  name: mayabank-keycloak-postgresql$' /tmp/wero-keycloak-ha.yaml
-          grep -q '^[[:space:]]*instances: 3$' /tmp/wero-keycloak-ha.yaml
-          grep -q '^[[:space:]]*database: keycloak$' /tmp/wero-keycloak-ha.yaml
-          grep -q '^[[:space:]]*owner: keycloak$' /tmp/wero-keycloak-ha.yaml
-          grep -q '^[[:space:]]*name: keycloak-db$' /tmp/wero-keycloak-ha.yaml
-          grep -q '^[[:space:]]*method: any$' /tmp/wero-keycloak-ha.yaml
-          grep -q '^[[:space:]]*number: 1$' /tmp/wero-keycloak-ha.yaml
-          grep -q '^[[:space:]]*dataDurability: required$' /tmp/wero-keycloak-ha.yaml
-          grep -q '^[[:space:]]*topologyKey: kubernetes.io/hostname$' /tmp/wero-keycloak-ha.yaml
+          grep -qF 'apiVersion: postgresql.cnpg.io/v1' /tmp/wero-keycloak-ha.yaml
+          grep -qF 'kind: Cluster' /tmp/wero-keycloak-ha.yaml
+          grep -qF 'name: mayabank-keycloak-postgresql' /tmp/wero-keycloak-ha.yaml
+          grep -qF 'instances: 3' /tmp/wero-keycloak-ha.yaml
+          grep -qF 'database: keycloak' /tmp/wero-keycloak-ha.yaml
+          grep -qF 'owner: keycloak' /tmp/wero-keycloak-ha.yaml
+          grep -qF 'name: keycloak-db' /tmp/wero-keycloak-ha.yaml
+          grep -qF 'method: any' /tmp/wero-keycloak-ha.yaml
+          grep -qF 'number: 1' /tmp/wero-keycloak-ha.yaml
+          grep -qF 'dataDurability: required' /tmp/wero-keycloak-ha.yaml
+          grep -qF 'topologyKey: kubernetes.io/hostname' /tmp/wero-keycloak-ha.yaml
 
       - name: Verify Keycloak Operator CR scaffold
         run: |
-          grep -q '^apiVersion: k8s.keycloak.org/v2beta1$' /tmp/wero-keycloak-ha.yaml
-          grep -q '^kind: Keycloak$' /tmp/wero-keycloak-ha.yaml
-          grep -q '^  name: mayabank-keycloak$' /tmp/wero-keycloak-ha.yaml
-          grep -q '^[[:space:]]*instances: 2$' /tmp/wero-keycloak-ha.yaml
-          grep -q '^[[:space:]]*vendor: postgres$' /tmp/wero-keycloak-ha.yaml
-          grep -q '^[[:space:]]*host: mayabank-keycloak-postgresql-rw$' /tmp/wero-keycloak-ha.yaml
-          grep -q '^[[:space:]]*database: keycloak$' /tmp/wero-keycloak-ha.yaml
-          grep -q '^[[:space:]]*key: username$' /tmp/wero-keycloak-ha.yaml
-          grep -q '^[[:space:]]*key: password$' /tmp/wero-keycloak-ha.yaml
-          grep -q '^[[:space:]]*enabled: false$' /tmp/wero-keycloak-ha.yaml
-          grep -q '^[[:space:]]*requiredDuringSchedulingIgnoredDuringExecution:$' /tmp/wero-keycloak-ha.yaml
-          grep -q '^[[:space:]]*topologyKey: topology.kubernetes.io/zone$' /tmp/wero-keycloak-ha.yaml
-          grep -q '^[[:space:]]*strategy: Auto$' /tmp/wero-keycloak-ha.yaml
-          grep -q '^[[:space:]]*name: metrics-enabled$' /tmp/wero-keycloak-ha.yaml
+          check_fixed() {
+            local needle="$1"
+            local label="$2"
+            if ! grep -qF "$needle" /tmp/wero-keycloak-ha.yaml; then
+              echo "ERROR: missing C4 invariant: $label ($needle)"
+              echo '--- rendered C4 diagnostic ---'
+              grep -nE 'apiVersion:|kind:|name: mayabank-keycloak|instances:|vendor:|host:|database:|key:|enabled:|strategy:|metrics-enabled|topologyKey:' /tmp/wero-keycloak-ha.yaml || true
+              exit 1
+            fi
+          }
+
+          check_fixed 'apiVersion: k8s.keycloak.org/v2beta1' 'Keycloak v2beta1 API'
+          check_fixed 'kind: Keycloak' 'Keycloak CR kind'
+          check_fixed 'name: mayabank-keycloak' 'Keycloak CR name'
+          check_fixed 'instances: 2' 'preprod Keycloak baseline replicas'
+          check_fixed 'vendor: postgres' 'PostgreSQL vendor'
+          check_fixed 'host: mayabank-keycloak-postgresql-rw' 'role-aware Keycloak DB endpoint'
+          check_fixed 'database: keycloak' 'Keycloak database name'
+          check_fixed 'key: username' 'DB username Secret key'
+          check_fixed 'key: password' 'DB password Secret key'
+          check_fixed 'enabled: false' 'operator ingress disabled until C5'
+          check_fixed 'requiredDuringSchedulingIgnoredDuringExecution:' 'required worker anti-affinity'
+          check_fixed 'topologyKey: topology.kubernetes.io/zone' 'zone topology spread'
+          check_fixed 'strategy: Auto' 'operator rolling-update strategy'
+          check_fixed 'name: metrics-enabled' 'Keycloak metrics option'
 
       - name: Verify no runtime Secret manifest is committed
         run: |
