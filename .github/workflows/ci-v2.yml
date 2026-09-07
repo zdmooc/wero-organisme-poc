@@ -152,6 +152,12 @@ jobs:
             grep -q 'namespace: wero-poc-prod' /tmp/wero-prod-rendered.yaml
           fi
 
+      - name: Validate V7 production lab scripts
+        run: |
+          if [[ -f tests/production/test-v7-cnpg-failover.sh ]]; then
+            bash -n tests/production/test-v7-cnpg-failover.sh
+          fi
+
       - name: Verify runtime Secrets are not part of rendered desired state
         run: |
           for rendered in /tmp/wero-rendered.yaml /tmp/wero-preprod-rendered.yaml /tmp/wero-prod-rendered.yaml; do
