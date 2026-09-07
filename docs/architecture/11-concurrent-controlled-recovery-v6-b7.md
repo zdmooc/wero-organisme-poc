@@ -29,11 +29,12 @@ UNKNOWN -> RECOVERY_PENDING
 
 The update is conditional on the current database status still being `UNKNOWN`.
 
-Only the caller whose update affects exactly one row owns the controlled resubmission. Other concurrent callers either:
+Only the caller whose update affects exactly one row owns the controlled resubmission. Other concurrent callers can safely:
 
 - observe `RECOVERY_PENDING` and return `RECOVERY_ALREADY_IN_PROGRESS`;
 - lose the conditional claim and return `RECOVERY_ALREADY_CLAIMED`;
-- or, if they arrive after completion, return `ALREADY_FINAL`.
+- arrive after completion and return `ALREADY_FINAL`;
+- or observe the winner's rail settlement and return `RECONCILED_WITHOUT_RESUBMIT` without issuing another payment to the rail.
 
 No losing caller is allowed to resubmit to the rail.
 
@@ -47,7 +48,7 @@ tests/resilience/test-v6-concurrent-recovery.sh
 
 The test launched **8 simultaneous recovery requests** against the same `paymentId` through the API Gateway.
 
-Observed actions:
+### Initial validated run
 
 ```text
 total = 8
@@ -57,7 +58,33 @@ RECOVERY_ALREADY_IN_PROGRESS = 6
 ALREADY_FINAL = 0
 ```
 
-Exactly one caller therefore owned the recovery claim and resubmitted the stored payment intent.
+### Race discovered during final regression
+
+A later concurrent run produced one additional safe outcome:
+
+```text
+RESUBMITTED = 1
+RECOVERY_ALREADY_CLAIMED = 3
+RECOVERY_ALREADY_IN_PROGRESS = 3
+RECONCILED_WITHOUT_RESUBMIT = 1
+```
+
+The reconciliation caller observed the settlement created by the winner and did not resubmit. Business invariants remained correct: one rail row, one settlement ledger, one recovery-start event, one recovered event and one settled event.
+
+The B7 test was therefore corrected to classify `RECONCILED_WITHOUT_RESUBMIT` as a safe losing outcome while keeping the strict requirement that exactly one request returns `RESUBMITTED`.
+
+### Final validated regression run
+
+```text
+total = 8
+RESUBMITTED = 1
+RECOVERY_ALREADY_CLAIMED = 2
+RECOVERY_ALREADY_IN_PROGRESS = 5
+ALREADY_FINAL = 0
+RECONCILED_WITHOUT_RESUBMIT = 0
+```
+
+Exactly one caller owned the recovery claim and resubmitted the stored payment intent.
 
 ## Business invariants after concurrency
 
@@ -73,7 +100,7 @@ PAYMENT_SETTLED = 1
 PAYMENT_RECOVERY_FAILED = 0
 ```
 
-The result finished with:
+The final regression finished with:
 
 ```text
 V6 OK (phase B7)
@@ -107,6 +134,6 @@ CRC is single-node. B7 does **not** prove:
 
 Those remain production architecture topics in Phase C.
 
-## Relationship to B8
+## Completion status
 
-After B7, the only remaining Phase B item before V6 CRC closure is B8: formalized degraded-mode behavior for Wero/EPI, SCT Inst, PostgreSQL, Kafka, Keycloak and API Gateway.
+B7 is complete on CRC and remained valid during the final V6 regression. B8 and the final V4/V5/Argo gate also passed afterward.
