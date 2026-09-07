@@ -71,7 +71,9 @@
 - [x] CI de rendu Kustomize ajoutée
 - [x] validation runtime CRC V5 (`V4 OK` + `V5 OK`)
 - [ ] promotion par image immutable/digest
-- [ ] overlays preprod/prod lorsque ces environnements existeront
+- [x] scaffold overlay `prod` architecture cible ajouté en V7 C1
+- [ ] overlay `preprod`
+- [ ] applications Argo CD preprod/prod lorsque les environnements existent
 - [ ] progressive delivery dans une itération dédiée
 
 ## V6 — SPOF / Résilience
@@ -107,18 +109,58 @@
 - [x] validation runtime récupération contrôlée (`V6 OK (phase B6)`: preflight `NOT_FOUND`, `RESUBMITTED -> SETTLED`, 1 rail row, 1 settlement ledger, `PAYMENT_RECOVERY_STARTED=1`, `PAYMENT_RECOVERED=1`, second recovery `ALREADY_FINAL`, Wero recovery 12 s lors de la régression finale)
 - [x] tests retry/idempotence concurrente sous panne (`V6 OK (phase B7)`: 8 recoveries simultanées, exactement 1 `RESUBMITTED`; régression finale 2 `RECOVERY_ALREADY_CLAIMED` + 5 `RECOVERY_ALREADY_IN_PROGRESS`, avec `RECONCILED_WITHOUT_RESUBMIT` reconnu comme résultat concurrent sûr possible ; final 1 rail row, 1 settlement ledger, 1 `PAYMENT_RECOVERY_STARTED`, 1 `PAYMENT_RECOVERED`, 0 duplication)
 - [x] modes dégradés (`V6 OK (phase B8)` : deux exécutions initiales puis régression finale. SCT Inst complet `2 -> 0` donne `UNKNOWN`, rail=0, ledger=0, aucun blind replay, reconcile `NOT_FOUND -> UNKNOWN`, recovery contrôlée unique ; RTO initiaux 14 s puis 12 s, régression finale 11 s. API Gateway complet `2 -> 0` rend reads/creates indisponibles sans side effect backend, puis retry intact `SETTLED` une fois ; RTO initiaux 16 s puis 11 s, régression finale 12 s)
-- [x] régression finale V4/V5/V6 avant clôture CRC : phases A et B1-B8 repassées/confirmées, dernier `V4 OK` + `V5 OK`, Argo CD `Synced/Healthy`, runtime sur la révision Git `b8dbb4c736efc560fc82fe8ecd798842abd5b71c`, workloads attendus Ready
+- [x] régression finale V4/V5/V6 avant clôture CRC : phases A et B1-B8 repassées/confirmées, dernier `V4 OK` + `V5 OK`, Argo CD `Synced/Healthy`, workloads attendus Ready
 
-### Phase C — cible HA production
-- [ ] anti-affinity/topology spread multi-node
-- [ ] HA PostgreSQL
-- [ ] Kafka/Redpanda multi-broker
-- [ ] Keycloak clusterisé + DB HA
-- [ ] HA ingress/LB/DNS
-- [ ] RTO/RPO cibles métier
-- [ ] multi-site / PRA
+## V7 — Cible HA production
+
+### C1 — topologie OpenShift multi-node / multi-zone
+- [x] branche `v7-production-ha-architecture` créée depuis la baseline V6 finale
+- [x] overlay `gitops/overlays/prod` créé dans le namespace cible `wero-poc-prod`
+- [x] 3 replicas pour les 6 workloads applicatifs N+1
+- [x] anti-affinity stricte par `kubernetes.io/hostname`
+- [x] topology spread par `topology.kubernetes.io/zone`, `maxSkew: 1`, `minDomains: 3`, `DoNotSchedule`
+- [x] PDB production `minAvailable: 2` pour les 6 workloads applicatifs
+- [x] CI Kustomize vérifie le rendu CRC et le rendu production
+- [x] documentation `docs/architecture/13-production-ha-topology-v7-c1.md`
+- [ ] validation runtime multi-worker / multi-zone sur un environnement OpenShift adapté
+
+### C2 — PostgreSQL HA
+- [ ] choisir l’architecture PostgreSQL HA selon les RPO/RTO métier
+- [ ] supprimer le modèle production single Deployment + PVC unique
+- [ ] failover contrôlé
+- [ ] sauvegarde / restauration / PITR
+- [ ] test de panne et mesure RTO/RPO
+
+### C3 — Kafka/Redpanda HA
+- [ ] architecture multi-broker
+- [ ] réplication/quorum/storage
+- [ ] perte d’un broker
+- [ ] continuité Outbox / audit sous défaillance broker
+
+### C4 — Keycloak HA
+- [ ] Keycloak multi-replicas
+- [ ] base Keycloak HA
+- [ ] sessions / cache / clés de signature
+- [ ] test perte pod / worker / zone IAM
+
+### C5 — Ingress / LB / DNS HA
+- [ ] routers/ingress HA
+- [ ] load balancer multi-failure-domain
+- [ ] DNS / health checks / certificats
+- [ ] test perte d’un point d’entrée
+
+### C6 — RTO/RPO métier
+- [ ] définir RTO/RPO par capacité de paiement
+- [ ] mapper les objectifs aux dépendances techniques
+- [ ] définir SLI/SLO et critères de validation
+
+### C7 — multi-site / PRA / runbooks
+- [ ] stratégie multi-site
+- [ ] réplication et bascule
 - [ ] runbooks de reprise
+- [ ] exercices de perte de site
+- [ ] preuves de reprise et critères de retour au nominal
 
-## V7 — Sandbox externe
+## V8 — Sandbox externe
 - [ ] connecter un adaptateur externe de test si les prérequis sont disponibles
 - [ ] conserver le mock local comme mode autonome
