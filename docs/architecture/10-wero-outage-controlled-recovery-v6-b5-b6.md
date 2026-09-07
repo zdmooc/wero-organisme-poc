@@ -92,21 +92,46 @@ single controlled resubmission
         +-- timeout/error --> UNKNOWN again
 ```
 
-## Runtime validation target
+## B6 runtime validation — CRC
 
-`tests/resilience/test-v6-controlled-recovery.sh` validates:
+`tests/resilience/test-v6-controlled-recovery.sh` passed with `V6 OK (phase B6)`.
 
-- creation of a genuine pre-rail `UNKNOWN` by stopping Wero/EPI;
-- rail row count = 0 and settlement ledger count = 0 before recovery;
-- Wero/EPI recovery and a reconciliation result `NOT_FOUND -> UNKNOWN`;
-- invalid/missing explicit confirmation cannot reach the rail;
-- valid controlled recovery performs the `NOT_FOUND` preflight and reaches `SETTLED`;
-- exactly one logical rail settlement and one settlement ledger row exist;
-- recovery Outbox events are emitted once;
-- a repeated recovery request after final state is a no-op.
+Observed evidence:
 
-B6 must be validated on CRC before being marked complete.
+- the test created a genuine pre-rail `UNKNOWN` while Wero/EPI was stopped;
+- before recovery, SCT Inst contained **0** row and settlement ledger contained **0** row for the payment;
+- Wero/EPI returned and the initial reconcile answered `railStatus=NOT_FOUND`, `afterStatus=UNKNOWN`;
+- invalid recovery confirmation was rejected and still left the rail row count at **0**;
+- explicit recovery answered:
+  - `railStatusBefore=NOT_FOUND`;
+  - `action=RESUBMITTED`;
+  - `afterStatus=SETTLED`;
+- exactly **1** SCT Inst rail row existed after recovery;
+- exactly **1** settlement ledger row existed after recovery;
+- Outbox contained exactly **1** `PAYMENT_RECOVERY_STARTED`;
+- Outbox contained exactly **1** `PAYMENT_RECOVERED`;
+- a repeated recovery request answered `action=ALREADY_FINAL` and did not create a second settlement;
+- observed Wero/EPI recovery time was **11 s**.
+
+The runtime evidence therefore validates the B6 sequential controlled-recovery contract on CRC.
+
+It does **not** yet prove the concurrent exclusion property when multiple recovery requests arrive simultaneously against two Payment Service replicas. That proof is B7.
+
+## Next validation — B7 concurrency/idempotence
+
+B7 must issue several simultaneous recovery calls for the same `paymentId` / payment intent and prove:
+
+- only one atomic `UNKNOWN -> RECOVERY_PENDING` claim succeeds;
+- only one rail resubmission is executed;
+- exactly one rail settlement remains;
+- exactly one settlement ledger remains;
+- no duplicate recovery/business Outbox is created;
+- losing concurrent callers receive a safe no-op/in-progress/final response rather than triggering another rail call.
+
+The purpose is to prove the exclusion mechanism under real concurrency, not merely through sequential retries.
 
 ## Limitations
 
 This POC recovery endpoint is an educational architecture mechanism, not a production payment-operations policy. A production decision would need scheme-specific evidence, reconciliation windows, operational authorization, audit trail, concurrency controls, SLA/RTO rules and potentially human approval. The POC is not affiliated with EPI/Wero or any bank, MayaBanque is fictional, and no real payment data is used.
+
+CRC is single-node. B5/B6 do not prove node HA, zone HA, site HA, disaster recovery or a production RPO=0 claim.
