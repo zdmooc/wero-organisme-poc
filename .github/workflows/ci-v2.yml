@@ -57,6 +57,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Java 21
+        if: ${{ false }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
       - name: Install pinned Kustomize 5.8.1
         run: |
           curl -fsSL -o /tmp/kustomize.tgz \
@@ -84,6 +91,27 @@ jobs:
             awk '/name: mock-sct-inst/{seen=1} seen && /replicas: 2/{found=1; exit} END{exit !found}' /tmp/wero-rendered.yaml
           fi
 
+      - name: Render and verify V7 preproduction topology when present
+        run: |
+          if [[ -f gitops/overlays/preprod/kustomization.yaml ]]; then
+            /tmp/kustomize build gitops/overlays/preprod > /tmp/wero-preprod-rendered.yaml
+
+            REPLICAS_2="$(grep -c '^[[:space:]]*replicas: 2$' /tmp/wero-preprod-rendered.yaml)"
+            PDB_MIN_1="$(grep -c '^[[:space:]]*minAvailable: 1$' /tmp/wero-preprod-rendered.yaml)"
+            ANTI_AFFINITY="$(grep -c '^[[:space:]]*requiredDuringSchedulingIgnoredDuringExecution:$' /tmp/wero-preprod-rendered.yaml)"
+            HOST_TOPOLOGY="$(grep -c '^[[:space:]]*topologyKey: kubernetes.io/hostname$' /tmp/wero-preprod-rendered.yaml)"
+            ZONE_TOPOLOGY="$(grep -c '^[[:space:]]*topologyKey: topology.kubernetes.io/zone$' /tmp/wero-preprod-rendered.yaml)"
+            MIN_DOMAINS_2="$(grep -c '^[[:space:]]*minDomains: 2$' /tmp/wero-preprod-rendered.yaml)"
+
+            [[ "$REPLICAS_2" -eq 6 ]] || { echo "Expected 6 preproduction application deployments at replicas=2, got $REPLICAS_2"; exit 1; }
+            [[ "$PDB_MIN_1" -eq 6 ]] || { echo "Expected 6 preproduction PDBs at minAvailable=1, got $PDB_MIN_1"; exit 1; }
+            [[ "$ANTI_AFFINITY" -eq 6 ]] || { echo "Expected required pod anti-affinity on 6 preproduction deployments, got $ANTI_AFFINITY"; exit 1; }
+            [[ "$HOST_TOPOLOGY" -eq 6 ]] || { echo "Expected hostname anti-affinity topology on 6 preproduction deployments, got $HOST_TOPOLOGY"; exit 1; }
+            [[ "$ZONE_TOPOLOGY" -eq 6 ]] || { echo "Expected zone topology spread on 6 preproduction deployments, got $ZONE_TOPOLOGY"; exit 1; }
+            [[ "$MIN_DOMAINS_2" -eq 6 ]] || { echo "Expected minDomains=2 on 6 preproduction deployments, got $MIN_DOMAINS_2"; exit 1; }
+            grep -q 'namespace: wero-poc-preprod' /tmp/wero-preprod-rendered.yaml
+          fi
+
       - name: Render and verify V7 production topology when present
         run: |
           if [[ -f gitops/overlays/prod/kustomization.yaml ]]; then
@@ -107,7 +135,7 @@ jobs:
 
       - name: Verify runtime Secrets are not part of rendered desired state
         run: |
-          for rendered in /tmp/wero-rendered.yaml /tmp/wero-prod-rendered.yaml; do
+          for rendered in /tmp/wero-rendered.yaml /tmp/wero-preprod-rendered.yaml /tmp/wero-prod-rendered.yaml; do
             [[ -f "$rendered" ]] || continue
             if grep -E '^[[:space:]]*kind:[[:space:]]*Secret[[:space:]]*$' "$rendered"; then
               echo "ERROR: Secret manifest found in rendered runtime desired state: $rendered"
