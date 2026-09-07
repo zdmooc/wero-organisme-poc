@@ -22,6 +22,16 @@ spec:
       name: keycloak-db
       key: password
 
+  # Preserve the existing in-cluster contract used by the Quarkus resource
+  # servers: http://keycloak:8080. C5 owns the public hostname, external TLS
+  # termination and Route/Ingress. HTTP here is therefore an internal service
+  # compatibility boundary, not a public clear-text exposure decision.
+  http:
+    httpEnabled: true
+    httpPort: 8080
+    serviceHttpPort: 8080
+    serviceName: keycloak
+
   # C5 owns the public hostname, TLS termination and ingress/Route contract.
   # Keep operator-managed ingress disabled here rather than inventing DNS/certs.
   ingress:
