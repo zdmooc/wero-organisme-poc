@@ -72,7 +72,7 @@
 - [x] validation runtime CRC V5 (`V4 OK` + `V5 OK`)
 - [ ] promotion par image immutable/digest
 - [x] scaffold overlay `prod` architecture cible ajouté en V7 C1
-- [ ] overlay `preprod`
+- [x] scaffold overlay `preprod` architecture cible ajouté en V7 C1
 - [ ] applications Argo CD preprod/prod lorsque les environnements existent
 - [ ] progressive delivery dans une itération dédiée
 
@@ -115,12 +115,15 @@
 
 ### C1 — topologie OpenShift multi-node / multi-zone
 - [x] branche `v7-production-ha-architecture` créée depuis la baseline V6 finale
+- [x] overlay `gitops/overlays/preprod` créé dans le namespace cible `wero-poc-preprod`
+- [x] preprod : 2 replicas pour les 6 workloads applicatifs, séparation worker et spread sur 2 zones
 - [x] overlay `gitops/overlays/prod` créé dans le namespace cible `wero-poc-prod`
-- [x] 3 replicas pour les 6 workloads applicatifs N+1
+- [x] prod : 3 replicas pour les 6 workloads applicatifs N+1
 - [x] anti-affinity stricte par `kubernetes.io/hostname`
-- [x] topology spread par `topology.kubernetes.io/zone`, `maxSkew: 1`, `minDomains: 3`, `DoNotSchedule`
-- [x] PDB production `minAvailable: 2` pour les 6 workloads applicatifs
-- [x] CI Kustomize vérifie le rendu CRC et le rendu production
+- [x] topology spread par `topology.kubernetes.io/zone`, `maxSkew: 1`, `DoNotSchedule`
+- [x] prod : `minDomains: 3`, PDB `minAvailable: 2`
+- [x] preprod : `minDomains: 2`, PDB de base `minAvailable: 1`
+- [x] CI Kustomize vérifie les rendus CRC, preprod et prod et l’absence de `Secret` dans le desired state
 - [x] documentation `docs/architecture/13-production-ha-topology-v7-c1.md`
 - [ ] validation runtime multi-worker / multi-zone sur un environnement OpenShift adapté
 
