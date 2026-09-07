@@ -83,7 +83,7 @@ tests/               E2E, sécurité, observabilité, GitOps, résilience
 - V3B : API Gateway et isolation Zero Trust — validé CRC
 - V4 : observabilité E2E — validé CRC
 - V5 : GitOps / Kustomize / OpenShift GitOps / Argo CD — validé CRC
-- V6 : SPOF, chaos, HA et résilience — phases A, B1, B2, B3, B4, B5, B6, B7 et B8 validées CRC ; seule la régression finale V4/V5/V6 reste à exécuter avant clôture CRC
+- V6 : SPOF, chaos, HA et résilience — **terminée et validée sur CRC** pour les phases A et B1-B8, avec régression finale V4/V5 et Argo CD `Synced/Healthy`
 - V7 : branchement optionnel à un sandbox externe lorsque possible
 
 ## V5 GitOps
@@ -98,21 +98,25 @@ Voir `docs/architecture/07-gitops-argocd-v5.md`.
 
 La phase A a mis en N+1 cinq workloads initialement stateless : `api-gateway`, `payment-service`, `consumer-psp`, `event-audit-service` et `mock-wero`. Ils tournent à deux replicas avec un `PodDisruptionBudget` `minAvailable=1` et ont survécu à la suppression d’un pod sur CRC.
 
-Les phases B1 à B3 ont ensuite validé la récupération PostgreSQL sur le même PVC, le buffering/replay transactionnel Outbox pendant une indisponibilité Kafka et le mode dégradé IAM avec JWT déjà émis pendant une panne Keycloak.
+Les phases B1 à B3 ont ensuite validé la récupération PostgreSQL sur le même PVC, le buffering/replay transactionnel Outbox pendant une indisponibilité Kafka et le mode dégradé IAM avec JWT déjà émis pendant une panne Keycloak. Pour B3, la validation initiale avait observé 131 s pour le retour du token et 135 s pour l’autorisation fresh-JWT/JWK ; la régression finale a observé **120 s / 124 s**.
 
 La phase B4 a supprimé le SPOF fonctionnel de `mock-sct-inst` : son état de settlement est maintenant partagé dans PostgreSQL, le mock tourne à deux replicas avec PDB, et un paiement ayant été settlé sur un pod a été réconcilié depuis `UNKNOWN` par un autre pod après suppression du premier, avec le même `settlementId`, une seule ligne rail et une seule écriture ledger.
 
-La phase B5 a validé la panne Wero/EPI avant rail : le paiement passe `UNKNOWN`, SCT Inst reste à 0 ligne, aucun settlement ledger n’est créé, la même idempotency key ne provoque aucun blind replay pendant ni après la panne, Wero revient à deux replicas en 11 s et la réconciliation `NOT_FOUND` conserve `UNKNOWN`.
+La phase B5 a validé la panne Wero/EPI avant rail : le paiement passe `UNKNOWN`, SCT Inst reste à 0 ligne, aucun settlement ledger n’est créé, la même idempotency key ne provoque aucun blind replay pendant ni après la panne, Wero revient à deux replicas en **11 s** lors de la régression finale et la réconciliation `NOT_FOUND` conserve `UNKNOWN`.
 
-La phase B6 a validé la récupération explicite de ce cas pré-rail : confirmation opérateur obligatoire, preflight SCT Inst `NOT_FOUND`, claim atomique local `UNKNOWN -> RECOVERY_PENDING`, puis une seule resoumission contrôlée. Le test CRC a observé `RESUBMITTED -> SETTLED`, exactement une ligne rail, un settlement ledger, un événement `PAYMENT_RECOVERY_STARTED`, un événement `PAYMENT_RECOVERED`, puis `ALREADY_FINAL` sur une nouvelle demande de recovery. Wero/EPI a récupéré en 11 s. Aucun `UNKNOWN` arbitraire n’est automatiquement rejoué.
+La phase B6 a validé la récupération explicite de ce cas pré-rail : confirmation opérateur obligatoire, preflight SCT Inst `NOT_FOUND`, claim atomique local `UNKNOWN -> RECOVERY_PENDING`, puis une seule resoumission contrôlée. La régression finale a observé `RESUBMITTED -> SETTLED`, exactement une ligne rail, un settlement ledger, un événement `PAYMENT_RECOVERY_STARTED`, un événement `PAYMENT_RECOVERED`, puis `ALREADY_FINAL` sur une nouvelle demande de recovery. Wero/EPI a récupéré en **12 s**. Aucun `UNKNOWN` arbitraire n’est automatiquement rejoué.
 
-La phase B7 a validé l’exclusion concurrente réelle : **8 recoveries simultanées** ont produit exactement **1 `RESUBMITTED`**, **1 `RECOVERY_ALREADY_CLAIMED`** et **6 `RECOVERY_ALREADY_IN_PROGRESS`**. Le paiement final est `SETTLED` avec exactement une ligne rail, une écriture ledger settlement, un `PAYMENT_RECOVERY_STARTED`, un `PAYMENT_RECOVERED` et aucun doublon métier. Ce résultat valide l’exclusion par claim DB sur CRC, pas une HA de nœud/zone/site.
+La phase B7 a validé l’exclusion concurrente réelle : **8 recoveries simultanées** ont produit exactement **1 `RESUBMITTED`**, **2 `RECOVERY_ALREADY_CLAIMED`** et **5 `RECOVERY_ALREADY_IN_PROGRESS`** lors de la régression finale. Un run précédent a aussi exposé `RECONCILED_WITHOUT_RESUBMIT`, désormais reconnu comme résultat concurrent sûr lorsqu’un appel observe le settlement du winner sans resoumettre. Dans tous les cas validés, le paiement final est `SETTLED` avec exactement une ligne rail, une écriture ledger settlement, un `PAYMENT_RECOVERY_STARTED`, un `PAYMENT_RECOVERED` et aucun doublon métier. Ce résultat valide l’exclusion par claim DB sur CRC, pas une HA de nœud/zone/site.
 
-La phase B8 a complété la matrice des modes dégradés. Deux exécutions CRC du test complet ont validé l’arrêt total de SCT Inst (`2 -> 0`) : paiement `UNKNOWN`, rail=0, ledger settlement=0, aucun blind replay, puis après reprise `NOT_FOUND -> UNKNOWN` et une seule recovery contrôlée `SETTLED`. Les RTO observés SCT Inst ont été **14 s puis 12 s**. L’arrêt total de l’API Gateway (`2 -> 0`) a rendu les lectures/créations publiques indisponibles sans créer de side effect backend ; après reprise, l’intent intact a été rejoué une seule fois vers `SETTLED`. Les RTO observés Gateway ont été **16 s puis 11 s**.
+La phase B8 a complété la matrice des modes dégradés. Deux exécutions initiales puis la régression finale ont validé l’arrêt total de SCT Inst (`2 -> 0`) : paiement `UNKNOWN`, rail=0, ledger settlement=0, aucun blind replay, puis après reprise `NOT_FOUND -> UNKNOWN` et une seule recovery contrôlée `SETTLED`. Les RTO observés SCT Inst ont été **14 s, 12 s, puis 11 s**. L’arrêt total de l’API Gateway (`2 -> 0`) a rendu les lectures/créations publiques indisponibles sans créer de side effect backend ; après reprise, l’intent intact a été rejoué une seule fois vers `SETTLED`. Les RTO observés Gateway ont été **16 s, 11 s, puis 12 s**.
 
-La Phase B V6 est donc entièrement validée sur CRC. Il reste uniquement la régression finale V4/V5/V6 avant de déclarer V6 CRC terminée.
+### Gate final CRC
 
-PostgreSQL, Kafka/Redpanda et Keycloak restent des dépendances mono-instance dans ce lab. CRC étant mono-nœud, ces validations couvrent des pannes de pod/processus et des indisponibilités contrôlées, pas une panne de nœud, zone ou site.
+La régression finale V6 a repassé/confirmé les phases A et B1-B8, puis le dernier gate V5 a produit `V4 OK` et `V5 OK`. Argo CD était `Synced/Healthy`, tous les workloads attendus étaient Ready et le runtime était aligné sur la révision Git `b8dbb4c736efc560fc82fe8ecd798842abd5b71c` au moment du contrôle final.
+
+**V6 CRC est donc techniquement terminée.**
+
+PostgreSQL, Kafka/Redpanda et Keycloak restent des dépendances mono-instance dans ce lab. CRC étant mono-nœud, ces validations couvrent des pannes de pod/processus et des indisponibilités contrôlées, pas une panne de nœud, zone ou site. La Phase C reste une cible d’architecture production et n’est pas un bloqueur de la clôture V6 CRC.
 
 Voir :
 - `docs/architecture/08-spof-chaos-ha-v6.md`
