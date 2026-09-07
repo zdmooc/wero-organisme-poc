@@ -3,18 +3,19 @@ kind: Kustomization
 
 # Architecture target only until C2-C7 complete the stateful, IAM, ingress,
 # RTO/RPO and PRA design. This overlay is intentionally not wired to the CRC
-# Argo CD Application. CloudNativePG CRDs/operator and runtime Secrets are
-# environment prerequisites.
+# Argo CD Application. CloudNativePG/Redpanda Operator CRDs, cert-manager and
+# runtime Secrets are environment prerequisites.
 namespace: wero-poc-prod
 
 resources:
   - ../../base
   - ../../components/postgresql-ha
+  - ../../components/redpanda-ha
 
 commonAnnotations:
   gitops.mayabanque.io/managed-by: argocd
   gitops.mayabanque.io/environment: prod
-  gitops.mayabanque.io/version: v7-c2
+  gitops.mayabanque.io/version: v7-c3
   architecture.mayabanque.io/status: target-not-crc-validated
 
 patches:
@@ -52,6 +53,31 @@ patches:
       kind: Service
       metadata:
         name: postgresql
+      $patch: delete
+
+  # C3 removes the V6 single-broker dev-container from production. Redpanda
+  # Operator owns the three-broker, TLS/SASL-enabled target.
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: kafka
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: kafka
+      $patch: delete
+
+  - target:
+      version: v1
+      kind: Service
+      name: kafka
+    patch: |-
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: kafka
       $patch: delete
 
   # Production CNPG target: one primary plus two standby candidates, with
@@ -159,6 +185,32 @@ patches:
                     value: jdbc:postgresql://mayabank-postgresql-rw:5432/wero
                   - name: QUARKUS_DATASOURCE__OUTBOX__JDBC_URL
                     value: jdbc:postgresql://mayabank-postgresql-rw:5432/wero
+                  - name: KAFKA_BOOTSTRAP_SERVERS
+                    value: redpanda-0.redpanda.wero-poc-prod.svc.cluster.local:9093,redpanda-1.redpanda.wero-poc-prod.svc.cluster.local:9093,redpanda-2.redpanda.wero-poc-prod.svc.cluster.local:9093
+                  - name: KAFKA_SECURITY_PROTOCOL
+                    value: SASL_SSL
+                  - name: KAFKA_SASL_MECHANISM
+                    value: SCRAM-SHA-512
+                  - name: KAFKA_SASL_JAAS_CONFIG
+                    valueFrom:
+                      secretKeyRef:
+                        name: redpanda-payment-producer
+                        key: jaas-config
+                  - name: KAFKA_SSL_TRUSTSTORE_TYPE
+                    value: PEM
+                  - name: KAFKA_SSL_TRUSTSTORE_LOCATION
+                    value: /etc/redpanda-ca/ca.crt
+                volumeMounts:
+                  - name: redpanda-client-ca
+                    mountPath: /etc/redpanda-ca
+                    readOnly: true
+            volumes:
+              - name: redpanda-client-ca
+                secret:
+                  secretName: redpanda-client-ca
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
 
   - target:
       group: apps
@@ -236,6 +288,32 @@ patches:
                     value: wero
                   - name: QUARKUS_DATASOURCE_JDBC_URL
                     value: jdbc:postgresql://mayabank-postgresql-rw:5432/wero
+                  - name: KAFKA_BOOTSTRAP_SERVERS
+                    value: redpanda-0.redpanda.wero-poc-prod.svc.cluster.local:9093,redpanda-1.redpanda.wero-poc-prod.svc.cluster.local:9093,redpanda-2.redpanda.wero-poc-prod.svc.cluster.local:9093
+                  - name: KAFKA_SECURITY_PROTOCOL
+                    value: SASL_SSL
+                  - name: KAFKA_SASL_MECHANISM
+                    value: SCRAM-SHA-512
+                  - name: KAFKA_SASL_JAAS_CONFIG
+                    valueFrom:
+                      secretKeyRef:
+                        name: redpanda-event-audit-consumer
+                        key: jaas-config
+                  - name: KAFKA_SSL_TRUSTSTORE_TYPE
+                    value: PEM
+                  - name: KAFKA_SSL_TRUSTSTORE_LOCATION
+                    value: /etc/redpanda-ca/ca.crt
+                volumeMounts:
+                  - name: redpanda-client-ca
+                    mountPath: /etc/redpanda-ca
+                    readOnly: true
+            volumes:
+              - name: redpanda-client-ca
+                secret:
+                  secretName: redpanda-client-ca
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
 
   - target:
       group: apps
