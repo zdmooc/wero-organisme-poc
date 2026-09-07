@@ -34,6 +34,18 @@ spec:
     rbac:
       enabled: true
 
+    # C3 security target. TLS protects broker/client traffic. SASL enables
+    # authentication and authorization for Kafka clients. The referenced
+    # superuser Secret is a runtime prerequisite and MUST be provided outside
+    # Git (for example by an approved secret-management mechanism).
+    tls:
+      enabled: true
+    auth:
+      sasl:
+        enabled: true
+        secretRef: redpanda-superusers
+        users: []
+
     # Prevent newly-created business topics from silently falling back to RF=1.
     # Existing topics must still be inspected/migrated explicitly.
     config:
@@ -41,3 +53,6 @@ spec:
         enable_rack_awareness: true
         default_topic_replications: 3
         minimum_topic_replications: 3
+        sasl_mechanisms:
+          - SCRAM
+        admin_api_require_auth: true
