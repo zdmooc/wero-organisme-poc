@@ -108,6 +108,10 @@ jobs:
           grep -qF 'httpEnabled: true' /tmp/c5-prod.yaml
           grep -qF 'serviceName: keycloak' /tmp/c5-prod.yaml
 
+      - name: Validate C5 runtime runbook syntax
+        run: |
+          bash -n tests/production/test-v7-ingress-failover.sh
+
       - name: Verify C5 desired state contains no Secret manifest
         run: |
           set -euo pipefail
