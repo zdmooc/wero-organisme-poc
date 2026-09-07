@@ -144,10 +144,21 @@
 - [ ] mesurer la fenêtre de perte éventuelle et mapper les preuves aux objectifs RPO/RTO C6
 
 ### C3 — Kafka/Redpanda HA
-- [ ] architecture multi-broker
-- [ ] réplication/quorum/storage
-- [ ] perte d’un broker
-- [ ] continuité Outbox / audit sous défaillance broker
+- [x] architecture de référence Redpanda Operator 3 brokers définie dans `docs/architecture/16-redpanda-ha-v7-c3.md`
+- [x] scaffold `cluster.redpanda.com/v1alpha2` / `Redpanda` créé pour Redpanda `v26.2.2`
+- [x] cible 3 brokers, PVC persistants `20Gi` placeholder et rack awareness `topology.kubernetes.io/zone`
+- [x] politique cible `default_topic_replications=3` et `minimum_topic_replications=3`
+- [x] composant Kustomize autonome `gitops/components/redpanda-ha` rendu et contrôlé par CI
+- [x] CRC et overlays preprod/prod laissés inchangés tant que la migration TLS/SASL/bootstrap n’est pas définie
+- [ ] définir TLS/SASL/ACL et cycle de certificats/credentials hors Git
+- [ ] définir et valider le bootstrap Kafka interne pour `payment-service` et `event-audit-service` sans modification Java
+- [ ] brancher le composant Redpanda HA dans preprod/prod et supprimer le `Deployment/Service kafka` du lab dans ces overlays
+- [ ] vérifier/créer/migrer réellement `payment-events` avec replication factor 3
+- [ ] définir/valider la politique producer `acks=all` selon latence et disponibilité C6
+- [ ] ajouter les labs C3-F1/F2/F3/F4 : broker, worker, zone et decommission
+- [ ] exécuter les pannes et mesurer leaderless/under-replicated partitions, RTO, Outbox pending et consumer lag
+- [ ] confirmer la continuité Outbox / audit et l’absence de duplication logique sous défaillance broker
+- [ ] mapper la stratégie DR Redpanda à C7
 
 ### C4 — Keycloak HA
 - [ ] Keycloak multi-replicas
