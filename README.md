@@ -83,7 +83,7 @@ tests/               E2E, sécurité, observabilité, GitOps, résilience
 - V3B : API Gateway et isolation Zero Trust — validé CRC
 - V4 : observabilité E2E — validé CRC
 - V5 : GitOps / Kustomize / OpenShift GitOps / Argo CD — validé CRC
-- V6 : SPOF, chaos, HA et résilience — phases A, B1, B2, B3, B4, B5, B6 et B7 validées CRC ; seuls les modes dégradés B8 restent à valider avant clôture CRC
+- V6 : SPOF, chaos, HA et résilience — phases A, B1, B2, B3, B4, B5, B6, B7 et B8 validées CRC ; seule la régression finale V4/V5/V6 reste à exécuter avant clôture CRC
 - V7 : branchement optionnel à un sandbox externe lorsque possible
 
 ## V5 GitOps
@@ -108,7 +108,9 @@ La phase B6 a validé la récupération explicite de ce cas pré-rail : confirma
 
 La phase B7 a validé l’exclusion concurrente réelle : **8 recoveries simultanées** ont produit exactement **1 `RESUBMITTED`**, **1 `RECOVERY_ALREADY_CLAIMED`** et **6 `RECOVERY_ALREADY_IN_PROGRESS`**. Le paiement final est `SETTLED` avec exactement une ligne rail, une écriture ledger settlement, un `PAYMENT_RECOVERY_STARTED`, un `PAYMENT_RECOVERED` et aucun doublon métier. Ce résultat valide l’exclusion par claim DB sur CRC, pas une HA de nœud/zone/site.
 
-Le seul élément Phase B encore ouvert est la formalisation et le test des modes dégradés B8.
+La phase B8 a complété la matrice des modes dégradés. Deux exécutions CRC du test complet ont validé l’arrêt total de SCT Inst (`2 -> 0`) : paiement `UNKNOWN`, rail=0, ledger settlement=0, aucun blind replay, puis après reprise `NOT_FOUND -> UNKNOWN` et une seule recovery contrôlée `SETTLED`. Les RTO observés SCT Inst ont été **14 s puis 12 s**. L’arrêt total de l’API Gateway (`2 -> 0`) a rendu les lectures/créations publiques indisponibles sans créer de side effect backend ; après reprise, l’intent intact a été rejoué une seule fois vers `SETTLED`. Les RTO observés Gateway ont été **16 s puis 11 s**.
+
+La Phase B V6 est donc entièrement validée sur CRC. Il reste uniquement la régression finale V4/V5/V6 avant de déclarer V6 CRC terminée.
 
 PostgreSQL, Kafka/Redpanda et Keycloak restent des dépendances mono-instance dans ce lab. CRC étant mono-nœud, ces validations couvrent des pannes de pod/processus et des indisponibilités contrôlées, pas une panne de nœud, zone ou site.
 
@@ -117,3 +119,4 @@ Voir :
 - `docs/architecture/09-sct-inst-shared-state-v6-b4.md`
 - `docs/architecture/10-wero-outage-controlled-recovery-v6-b5-b6.md`
 - `docs/architecture/11-concurrent-controlled-recovery-v6-b7.md`
+- `docs/architecture/12-degraded-modes-v6-b8.md`
