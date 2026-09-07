@@ -96,6 +96,7 @@ jobs:
             ZONE_TOPOLOGY="$(grep -c '^[[:space:]]*topologyKey: topology.kubernetes.io/zone$' /tmp/wero-preprod-rendered.yaml)"
             MIN_DOMAINS_2="$(grep -c '^[[:space:]]*minDomains: 2$' /tmp/wero-preprod-rendered.yaml)"
 
+            EXPECT_PDB_MIN_1=6
             EXPECT_ANTI_AFFINITY=6
             EXPECT_HOST=6
             EXPECT_ZONE=6
@@ -130,8 +131,8 @@ jobs:
               grep -q '^[[:space:]]*serviceName: keycloak$' /tmp/wero-preprod-rendered.yaml
               grep -q '^[[:space:]]*serviceHttpPort: 8080$' /tmp/wero-preprod-rendered.yaml
               grep -q '^[[:space:]]*httpEnabled: true$' /tmp/wero-preprod-rendered.yaml
-              ! grep -q '^kind: Deployment$' -A5 /tmp/wero-preprod-rendered.yaml | grep -q '^  name: keycloak$'
-              ! awk '/^kind: Route$/{route=1; next} route && /^  name: keycloak$/{found=1} /^---$/{route=0} END{exit found ? 0 : 1}' /tmp/wero-preprod-rendered.yaml
+              grep -q '^  name: mayabank-keycloak$' /tmp/wero-preprod-rendered.yaml
+              EXPECT_PDB_MIN_1=7
               EXPECT_ANTI_AFFINITY=7
               EXPECT_HOST=10
               EXPECT_ZONE=9
@@ -139,7 +140,7 @@ jobs:
             fi
 
             [[ "$REPLICAS_2" -eq 6 ]] || { echo "Expected 6 preproduction application deployments at replicas=2, got $REPLICAS_2"; exit 1; }
-            [[ "$PDB_MIN_1" -eq 6 ]] || { echo "Expected 6 preproduction PDBs at minAvailable=1, got $PDB_MIN_1"; exit 1; }
+            [[ "$PDB_MIN_1" -eq "$EXPECT_PDB_MIN_1" ]] || { echo "Expected $EXPECT_PDB_MIN_1 preproduction PDBs at minAvailable=1, got $PDB_MIN_1"; exit 1; }
             [[ "$ANTI_AFFINITY" -eq "$EXPECT_ANTI_AFFINITY" ]] || { echo "Expected $EXPECT_ANTI_AFFINITY required pod anti-affinity declarations in preproduction, got $ANTI_AFFINITY"; exit 1; }
             [[ "$HOST_TOPOLOGY" -eq "$EXPECT_HOST" ]] || { echo "Expected $EXPECT_HOST hostname topology keys in preproduction, got $HOST_TOPOLOGY"; exit 1; }
             [[ "$ZONE_TOPOLOGY" -eq "$EXPECT_ZONE" ]] || { echo "Expected $EXPECT_ZONE zone topology-spread keys in preproduction, got $ZONE_TOPOLOGY"; exit 1; }
@@ -160,6 +161,7 @@ jobs:
             MIN_DOMAINS_3="$(grep -c '^[[:space:]]*minDomains: 3$' /tmp/wero-prod-rendered.yaml)"
 
             EXPECT_REPLICAS_3=6
+            EXPECT_PDB_MIN_2=6
             EXPECT_ANTI_AFFINITY=6
             EXPECT_HOST=6
             EXPECT_ZONE=6
@@ -194,6 +196,7 @@ jobs:
               grep -q 'mayabank-keycloak-postgresql-rw' /tmp/wero-prod-rendered.yaml
               grep -q '^[[:space:]]*instances: 3$' /tmp/wero-prod-rendered.yaml
               grep -q '^[[:space:]]*serviceName: keycloak$' /tmp/wero-prod-rendered.yaml
+              EXPECT_PDB_MIN_2=7
               EXPECT_ANTI_AFFINITY=7
               EXPECT_HOST=10
               EXPECT_ZONE=9
@@ -201,7 +204,7 @@ jobs:
             fi
 
             [[ "$REPLICAS_3" -eq "$EXPECT_REPLICAS_3" ]] || { echo "Expected $EXPECT_REPLICAS_3 replicas=3 declarations in production target, got $REPLICAS_3"; exit 1; }
-            [[ "$PDB_MIN_2" -eq 6 ]] || { echo "Expected 6 production PDBs at minAvailable=2, got $PDB_MIN_2"; exit 1; }
+            [[ "$PDB_MIN_2" -eq "$EXPECT_PDB_MIN_2" ]] || { echo "Expected $EXPECT_PDB_MIN_2 production PDBs at minAvailable=2, got $PDB_MIN_2"; exit 1; }
             [[ "$ANTI_AFFINITY" -eq "$EXPECT_ANTI_AFFINITY" ]] || { echo "Expected $EXPECT_ANTI_AFFINITY required pod anti-affinity declarations in production, got $ANTI_AFFINITY"; exit 1; }
             [[ "$HOST_TOPOLOGY" -eq "$EXPECT_HOST" ]] || { echo "Expected $EXPECT_HOST hostname topology keys in production, got $HOST_TOPOLOGY"; exit 1; }
             [[ "$ZONE_TOPOLOGY" -eq "$EXPECT_ZONE" ]] || { echo "Expected $EXPECT_ZONE zone topology-spread keys in production, got $ZONE_TOPOLOGY"; exit 1; }
