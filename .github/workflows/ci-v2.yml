@@ -96,12 +96,25 @@ jobs:
             ZONE_TOPOLOGY="$(grep -c '^[[:space:]]*topologyKey: topology.kubernetes.io/zone$' /tmp/wero-preprod-rendered.yaml)"
             MIN_DOMAINS_2="$(grep -c '^[[:space:]]*minDomains: 2$' /tmp/wero-preprod-rendered.yaml)"
 
+            EXPECT_HOST=6
+            EXPECT_ZONE=6
+            EXPECT_MIN_DOMAINS=6
+            if grep -q '^kind: Cluster$' /tmp/wero-preprod-rendered.yaml; then
+              grep -q '^  name: mayabank-postgresql$' /tmp/wero-preprod-rendered.yaml
+              grep -q '^[[:space:]]*instances: 3$' /tmp/wero-preprod-rendered.yaml
+              grep -q 'mayabank-postgresql-rw' /tmp/wero-preprod-rendered.yaml
+              ! grep -q '^  name: postgresql$' /tmp/wero-preprod-rendered.yaml
+              EXPECT_HOST=7
+              EXPECT_ZONE=7
+              EXPECT_MIN_DOMAINS=7
+            fi
+
             [[ "$REPLICAS_2" -eq 6 ]] || { echo "Expected 6 preproduction application deployments at replicas=2, got $REPLICAS_2"; exit 1; }
             [[ "$PDB_MIN_1" -eq 6 ]] || { echo "Expected 6 preproduction PDBs at minAvailable=1, got $PDB_MIN_1"; exit 1; }
-            [[ "$ANTI_AFFINITY" -eq 6 ]] || { echo "Expected required pod anti-affinity on 6 preproduction deployments, got $ANTI_AFFINITY"; exit 1; }
-            [[ "$HOST_TOPOLOGY" -eq 6 ]] || { echo "Expected hostname anti-affinity topology on 6 preproduction deployments, got $HOST_TOPOLOGY"; exit 1; }
-            [[ "$ZONE_TOPOLOGY" -eq 6 ]] || { echo "Expected zone topology spread on 6 preproduction deployments, got $ZONE_TOPOLOGY"; exit 1; }
-            [[ "$MIN_DOMAINS_2" -eq 6 ]] || { echo "Expected minDomains=2 on 6 preproduction deployments, got $MIN_DOMAINS_2"; exit 1; }
+            [[ "$ANTI_AFFINITY" -eq 6 ]] || { echo "Expected required pod anti-affinity on 6 preproduction application deployments, got $ANTI_AFFINITY"; exit 1; }
+            [[ "$HOST_TOPOLOGY" -eq "$EXPECT_HOST" ]] || { echo "Expected $EXPECT_HOST hostname topology keys in preproduction, got $HOST_TOPOLOGY"; exit 1; }
+            [[ "$ZONE_TOPOLOGY" -eq "$EXPECT_ZONE" ]] || { echo "Expected $EXPECT_ZONE zone topology-spread keys in preproduction, got $ZONE_TOPOLOGY"; exit 1; }
+            [[ "$MIN_DOMAINS_2" -eq "$EXPECT_MIN_DOMAINS" ]] || { echo "Expected $EXPECT_MIN_DOMAINS minDomains=2 constraints in preproduction, got $MIN_DOMAINS_2"; exit 1; }
             grep -q 'namespace: wero-poc-preprod' /tmp/wero-preprod-rendered.yaml
           fi
 
@@ -117,12 +130,25 @@ jobs:
             ZONE_TOPOLOGY="$(grep -c '^[[:space:]]*topologyKey: topology.kubernetes.io/zone$' /tmp/wero-prod-rendered.yaml)"
             MIN_DOMAINS_3="$(grep -c '^[[:space:]]*minDomains: 3$' /tmp/wero-prod-rendered.yaml)"
 
+            EXPECT_HOST=6
+            EXPECT_ZONE=6
+            EXPECT_MIN_DOMAINS=6
+            if grep -q '^kind: Cluster$' /tmp/wero-prod-rendered.yaml; then
+              grep -q '^  name: mayabank-postgresql$' /tmp/wero-prod-rendered.yaml
+              grep -q '^[[:space:]]*instances: 3$' /tmp/wero-prod-rendered.yaml
+              grep -q 'mayabank-postgresql-rw' /tmp/wero-prod-rendered.yaml
+              ! grep -q '^  name: postgresql$' /tmp/wero-prod-rendered.yaml
+              EXPECT_HOST=7
+              EXPECT_ZONE=7
+              EXPECT_MIN_DOMAINS=7
+            fi
+
             [[ "$REPLICAS_3" -eq 6 ]] || { echo "Expected 6 application deployments at replicas=3, got $REPLICAS_3"; exit 1; }
             [[ "$PDB_MIN_2" -eq 6 ]] || { echo "Expected 6 production PDBs at minAvailable=2, got $PDB_MIN_2"; exit 1; }
-            [[ "$ANTI_AFFINITY" -eq 6 ]] || { echo "Expected required pod anti-affinity on 6 application deployments, got $ANTI_AFFINITY"; exit 1; }
-            [[ "$HOST_TOPOLOGY" -eq 6 ]] || { echo "Expected hostname anti-affinity topology on 6 deployments, got $HOST_TOPOLOGY"; exit 1; }
-            [[ "$ZONE_TOPOLOGY" -eq 6 ]] || { echo "Expected zone topology spread on 6 deployments, got $ZONE_TOPOLOGY"; exit 1; }
-            [[ "$MIN_DOMAINS_3" -eq 6 ]] || { echo "Expected minDomains=3 on 6 deployments, got $MIN_DOMAINS_3"; exit 1; }
+            [[ "$ANTI_AFFINITY" -eq 6 ]] || { echo "Expected required pod anti-affinity on 6 production application deployments, got $ANTI_AFFINITY"; exit 1; }
+            [[ "$HOST_TOPOLOGY" -eq "$EXPECT_HOST" ]] || { echo "Expected $EXPECT_HOST hostname topology keys in production, got $HOST_TOPOLOGY"; exit 1; }
+            [[ "$ZONE_TOPOLOGY" -eq "$EXPECT_ZONE" ]] || { echo "Expected $EXPECT_ZONE zone topology-spread keys in production, got $ZONE_TOPOLOGY"; exit 1; }
+            [[ "$MIN_DOMAINS_3" -eq "$EXPECT_MIN_DOMAINS" ]] || { echo "Expected $EXPECT_MIN_DOMAINS minDomains=3 constraints in production, got $MIN_DOMAINS_3"; exit 1; }
             grep -q 'namespace: wero-poc-prod' /tmp/wero-prod-rendered.yaml
           fi
 
