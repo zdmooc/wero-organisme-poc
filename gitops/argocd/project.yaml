@@ -8,8 +8,17 @@ spec:
   sourceRepos:
     - https://github.com/zdmooc/wero-organisme-poc.git
   destinations:
+    # CRC remains local to the management/CRC cluster.
     - namespace: wero-poc
       server: https://kubernetes.default.svc
+    # V7 target namespaces are provider-neutral. Concrete remote cluster URLs are
+    # stored only in Argo CD cluster registrations, never in Git.
+    - namespace: wero-poc-preprod
+      server: '*'
+    - namespace: wero-poc-prod
+      server: '*'
+    - namespace: openshift-ingress-operator
+      server: '*'
   namespaceResourceWhitelist:
     - group: '*'
       kind: '*'

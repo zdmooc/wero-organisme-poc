@@ -1,0 +1,75 @@
+# C5 provider-neutral ingress hardening. The standard OpenShift ingress namespace
+# identity is used here; runtime tests must still verify the actual network path.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontdoor-api-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app: api-gateway
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-ingress
+      ports:
+        - protocol: TCP
+          port: 8080
+    - from:
+        - podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontdoor-keycloak
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: mayabank-keycloak
+      app.kubernetes.io/component: server
+  policyTypes:
+    - Ingress
+  ingress:
+    # Public router -> Keycloak HTTPS/re-encrypt path.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-ingress
+      ports:
+        - protocol: TCP
+          port: 8443
+    # Existing in-namespace resource servers keep the C4 internal OIDC contract.
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - api-gateway
+                  - payment-service
+                  - event-audit-service
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Keycloak server-to-server traffic for cache/cluster internals.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: mayabank-keycloak
+              app.kubernetes.io/component: server
+    # Metrics remain internal; no public Route is created for the management port.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - protocol: TCP
+          port: 9000

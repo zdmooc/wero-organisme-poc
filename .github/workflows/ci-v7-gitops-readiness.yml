@@ -1,0 +1,73 @@
+name: V7 GitOps production-readiness contracts
+
+on:
+  push:
+    branches:
+      - v7-production-ha-architecture
+    paths:
+      - 'gitops/argocd/project.yaml'
+      - 'gitops/argocd/applicationset-v7-environments.yaml'
+      - 'gitops/components/frontdoor-ha/**'
+      - 'docs/architecture/24-gitops-promotion-v7.md'
+      - 'docs/architecture/25-progressive-delivery-v7.md'
+      - 'scripts/prepare-v7-image-promotion.sh'
+      - '.github/workflows/ci-v7-gitops-readiness.yml'
+  pull_request:
+    paths:
+      - 'gitops/argocd/project.yaml'
+      - 'gitops/argocd/applicationset-v7-environments.yaml'
+      - 'gitops/components/frontdoor-ha/**'
+      - 'docs/architecture/24-gitops-promotion-v7.md'
+      - 'docs/architecture/25-progressive-delivery-v7.md'
+      - 'scripts/prepare-v7-image-promotion.sh'
+      - '.github/workflows/ci-v7-gitops-readiness.yml'
+
+jobs:
+  gitops-readiness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate promotion script syntax
+        run: bash -n scripts/prepare-v7-image-promotion.sh
+
+      - name: Verify ApplicationSet provider-neutral contract
+        run: |
+          set -euo pipefail
+          file=gitops/argocd/applicationset-v7-environments.yaml
+          [[ "$(grep -c '^kind: ApplicationSet$' "$file")" -eq 4 ]]
+          grep -q 'mayabanque.io/environment: preprod' "$file"
+          grep -q 'mayabanque.io/environment: prod' "$file"
+          [[ "$(grep -c "server: '{{.server}}'" "$file")" -eq 4 ]]
+          grep -q 'path: gitops/overlays/preprod-c5' "$file"
+          grep -q 'path: gitops/overlays/prod-c5' "$file"
+          grep -q 'include: preprod-ingresscontroller.yaml' "$file"
+          grep -q 'include: prod-ingresscontroller.yaml' "$file"
+
+      - name: Verify AppProject target namespaces
+        run: |
+          set -euo pipefail
+          grep -q 'namespace: wero-poc-preprod' gitops/argocd/project.yaml
+          grep -q 'namespace: wero-poc-prod' gitops/argocd/project.yaml
+          grep -q 'namespace: openshift-ingress-operator' gitops/argocd/project.yaml
+
+      - name: Verify frontdoor NetworkPolicies
+        run: |
+          set -euo pipefail
+          grep -q 'name: frontdoor-api-gateway' gitops/components/frontdoor-ha/networkpolicies.yaml
+          grep -q 'name: frontdoor-keycloak' gitops/components/frontdoor-ha/networkpolicies.yaml
+          grep -q 'kubernetes.io/metadata.name: openshift-ingress' gitops/components/frontdoor-ha/networkpolicies.yaml
+          grep -q 'port: 8443' gitops/components/frontdoor-ha/networkpolicies.yaml
+          grep -q 'port: 9000' gitops/components/frontdoor-ha/networkpolicies.yaml
+          grep -q 'networkpolicies.yaml' gitops/components/frontdoor-ha/kustomization.yaml
+
+      - name: Verify no credentials or Secret manifests added
+        run: |
+          set -euo pipefail
+          for f in \
+            gitops/argocd/applicationset-v7-environments.yaml \
+            gitops/components/frontdoor-ha/networkpolicies.yaml \
+            docs/architecture/24-gitops-promotion-v7.md \
+            docs/architecture/25-progressive-delivery-v7.md; do
+            ! grep -Eq '^kind:[[:space:]]*Secret[[:space:]]*$' "$f"
+          done
