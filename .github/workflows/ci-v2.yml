@@ -1,4 +1,4 @@
-name: V2/V2B/V3/V3B/V4 compile checks
+name: V2/V2B/V3/V3B/V4/V5/V6/V7 checks
 
 on:
   push:
@@ -8,6 +8,9 @@ on:
       - v3-security-consent-sca
       - v3b-api-gateway-zero-trust
       - v4-observability-e2e
+      - v5-gitops-argocd
+      - v6-spof-chaos-ha-resilience
+      - v7-production-ha-architecture
   pull_request:
     branches:
       - v1-single-immediate
@@ -15,6 +18,10 @@ on:
       - v2b-kafka-outbox-events
       - v3-security-consent-sca
       - v3b-api-gateway-zero-trust
+      - v4-observability-e2e
+      - v5-gitops-argocd
+      - v6-spof-chaos-ha-resilience
+      - v7-production-ha-architecture
 
 jobs:
   compile:
@@ -43,3 +50,220 @@ jobs:
       - name: Compile ${{ matrix.module }}
         working-directory: ${{ matrix.module }}
         run: mvn -B clean package -DskipTests
+
+  gitops-render:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pinned Kustomize 5.8.1
+        run: |
+          curl -fsSL -o /tmp/kustomize.tgz \
+            https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.8.1/kustomize_v5.8.1_linux_amd64.tar.gz
+          echo "029a7f0f4e1932c52a0476cf02a0fd855c0bb85694b82c338fc648dcb53a819d  /tmp/kustomize.tgz" | sha256sum -c -
+          tar -xzf /tmp/kustomize.tgz -C /tmp
+          /tmp/kustomize version
+
+      - name: Render CRC desired state
+        run: |
+          /tmp/kustomize build gitops/overlays/crc > /tmp/wero-rendered.yaml
+          grep -q 'name: api-gateway' /tmp/wero-rendered.yaml
+          grep -q 'name: payment-service' /tmp/wero-rendered.yaml
+          grep -q 'name: keycloak' /tmp/wero-rendered.yaml
+          grep -q 'name: jaeger' /tmp/wero-rendered.yaml
+          grep -q 'name: prometheus' /tmp/wero-rendered.yaml
+          grep -q 'name: grafana' /tmp/wero-rendered.yaml
+
+      - name: Verify V6 resilience resources when present
+        run: |
+          if [[ -f gitops/base/resilience.yaml ]]; then
+            PDB_COUNT="$(grep -c '^kind: PodDisruptionBudget$' /tmp/wero-rendered.yaml)"
+            [[ "$PDB_COUNT" -eq 6 ]] || { echo "Expected 6 PDBs for V6 N+1 workloads, got $PDB_COUNT"; exit 1; }
+            grep -q 'minAvailable: 1' /tmp/wero-rendered.yaml
+            awk '/name: mock-sct-inst/{seen=1} seen && /replicas: 2/{found=1; exit} END{exit !found}' /tmp/wero-rendered.yaml
+          fi
+
+      - name: Render and verify V7 preproduction topology when present
+        run: |
+          if [[ -f gitops/overlays/preprod/kustomization.yaml ]]; then
+            /tmp/kustomize build gitops/overlays/preprod > /tmp/wero-preprod-rendered.yaml
+
+            REPLICAS_2="$(grep -c '^[[:space:]]*replicas: 2$' /tmp/wero-preprod-rendered.yaml)"
+            PDB_MIN_1="$(grep -c '^[[:space:]]*minAvailable: 1$' /tmp/wero-preprod-rendered.yaml)"
+            ANTI_AFFINITY="$(grep -c '^[[:space:]]*requiredDuringSchedulingIgnoredDuringExecution:$' /tmp/wero-preprod-rendered.yaml)"
+            HOST_TOPOLOGY="$(grep -c '^[[:space:]]*topologyKey: kubernetes.io/hostname$' /tmp/wero-preprod-rendered.yaml)"
+            ZONE_TOPOLOGY="$(grep -c '^[[:space:]]*topologyKey: topology.kubernetes.io/zone$' /tmp/wero-preprod-rendered.yaml)"
+            MIN_DOMAINS_2="$(grep -c '^[[:space:]]*minDomains: 2$' /tmp/wero-preprod-rendered.yaml)"
+
+            EXPECT_PDB_MIN_1=6
+            EXPECT_ANTI_AFFINITY=6
+            EXPECT_HOST=6
+            EXPECT_ZONE=6
+            EXPECT_MIN_DOMAINS=6
+
+            if grep -q '^kind: Cluster$' /tmp/wero-preprod-rendered.yaml; then
+              grep -q '^  name: mayabank-postgresql$' /tmp/wero-preprod-rendered.yaml
+              grep -q '^[[:space:]]*instances: 3$' /tmp/wero-preprod-rendered.yaml
+              grep -q 'mayabank-postgresql-rw' /tmp/wero-preprod-rendered.yaml
+              ! grep -q '^  name: postgresql$' /tmp/wero-preprod-rendered.yaml
+              EXPECT_HOST=7
+              EXPECT_ZONE=7
+              EXPECT_MIN_DOMAINS=7
+            fi
+
+            if grep -q '^kind: Redpanda$' /tmp/wero-preprod-rendered.yaml; then
+              grep -q '^  name: redpanda$' /tmp/wero-preprod-rendered.yaml
+              ! grep -q '^  name: kafka$' /tmp/wero-preprod-rendered.yaml
+              grep -q 'redpanda-0.redpanda.wero-poc-preprod.svc.cluster.local:9093' /tmp/wero-preprod-rendered.yaml
+              [[ "$(grep -c '^[[:space:]]*- name: KAFKA_SECURITY_PROTOCOL$' /tmp/wero-preprod-rendered.yaml)" -eq 2 ]]
+              [[ "$(grep -c '^[[:space:]]*value: SASL_SSL$' /tmp/wero-preprod-rendered.yaml)" -eq 2 ]]
+              [[ "$(grep -c '^[[:space:]]*value: SCRAM-SHA-512$' /tmp/wero-preprod-rendered.yaml)" -eq 2 ]]
+              [[ "$(grep -c '^[[:space:]]*secretName: redpanda-client-ca$' /tmp/wero-preprod-rendered.yaml)" -eq 2 ]]
+              grep -q '^[[:space:]]*name: redpanda-payment-producer$' /tmp/wero-preprod-rendered.yaml
+              grep -q '^[[:space:]]*name: redpanda-event-audit-consumer$' /tmp/wero-preprod-rendered.yaml
+            fi
+
+            if grep -q '^kind: Keycloak$' /tmp/wero-preprod-rendered.yaml; then
+              grep -q '^  name: mayabank-keycloak$' /tmp/wero-preprod-rendered.yaml
+              grep -q '^  name: mayabank-keycloak-postgresql$' /tmp/wero-preprod-rendered.yaml
+              grep -q 'mayabank-keycloak-postgresql-rw' /tmp/wero-preprod-rendered.yaml
+              grep -q '^[[:space:]]*serviceName: keycloak$' /tmp/wero-preprod-rendered.yaml
+              grep -q '^[[:space:]]*serviceHttpPort: 8080$' /tmp/wero-preprod-rendered.yaml
+              grep -q '^[[:space:]]*httpEnabled: true$' /tmp/wero-preprod-rendered.yaml
+              grep -q '^  name: mayabank-keycloak$' /tmp/wero-preprod-rendered.yaml
+              EXPECT_PDB_MIN_1=7
+              EXPECT_ANTI_AFFINITY=7
+              EXPECT_HOST=10
+              EXPECT_ZONE=9
+              EXPECT_MIN_DOMAINS=10
+            fi
+
+            [[ "$REPLICAS_2" -eq 6 ]] || { echo "Expected 6 preproduction application deployments at replicas=2, got $REPLICAS_2"; exit 1; }
+            [[ "$PDB_MIN_1" -eq "$EXPECT_PDB_MIN_1" ]] || { echo "Expected $EXPECT_PDB_MIN_1 preproduction PDBs at minAvailable=1, got $PDB_MIN_1"; exit 1; }
+            [[ "$ANTI_AFFINITY" -eq "$EXPECT_ANTI_AFFINITY" ]] || { echo "Expected $EXPECT_ANTI_AFFINITY required pod anti-affinity declarations in preproduction, got $ANTI_AFFINITY"; exit 1; }
+            [[ "$HOST_TOPOLOGY" -eq "$EXPECT_HOST" ]] || { echo "Expected $EXPECT_HOST hostname topology keys in preproduction, got $HOST_TOPOLOGY"; exit 1; }
+            [[ "$ZONE_TOPOLOGY" -eq "$EXPECT_ZONE" ]] || { echo "Expected $EXPECT_ZONE zone topology-spread keys in preproduction, got $ZONE_TOPOLOGY"; exit 1; }
+            [[ "$MIN_DOMAINS_2" -eq "$EXPECT_MIN_DOMAINS" ]] || { echo "Expected $EXPECT_MIN_DOMAINS minDomains=2 constraints in preproduction, got $MIN_DOMAINS_2"; exit 1; }
+            grep -q 'namespace: wero-poc-preprod' /tmp/wero-preprod-rendered.yaml
+          fi
+
+      - name: Render and verify V7 production topology when present
+        run: |
+          if [[ -f gitops/overlays/prod/kustomization.yaml ]]; then
+            /tmp/kustomize build gitops/overlays/prod > /tmp/wero-prod-rendered.yaml
+
+            REPLICAS_3="$(grep -c '^[[:space:]]*replicas: 3$' /tmp/wero-prod-rendered.yaml)"
+            PDB_MIN_2="$(grep -c '^[[:space:]]*minAvailable: 2$' /tmp/wero-prod-rendered.yaml)"
+            ANTI_AFFINITY="$(grep -c '^[[:space:]]*requiredDuringSchedulingIgnoredDuringExecution:$' /tmp/wero-prod-rendered.yaml)"
+            HOST_TOPOLOGY="$(grep -c '^[[:space:]]*topologyKey: kubernetes.io/hostname$' /tmp/wero-prod-rendered.yaml)"
+            ZONE_TOPOLOGY="$(grep -c '^[[:space:]]*topologyKey: topology.kubernetes.io/zone$' /tmp/wero-prod-rendered.yaml)"
+            MIN_DOMAINS_3="$(grep -c '^[[:space:]]*minDomains: 3$' /tmp/wero-prod-rendered.yaml)"
+
+            EXPECT_REPLICAS_3=6
+            EXPECT_PDB_MIN_2=6
+            EXPECT_ANTI_AFFINITY=6
+            EXPECT_HOST=6
+            EXPECT_ZONE=6
+            EXPECT_MIN_DOMAINS=6
+
+            if grep -q '^kind: Cluster$' /tmp/wero-prod-rendered.yaml; then
+              grep -q '^  name: mayabank-postgresql$' /tmp/wero-prod-rendered.yaml
+              grep -q '^[[:space:]]*instances: 3$' /tmp/wero-prod-rendered.yaml
+              grep -q 'mayabank-postgresql-rw' /tmp/wero-prod-rendered.yaml
+              ! grep -q '^  name: postgresql$' /tmp/wero-prod-rendered.yaml
+              EXPECT_HOST=7
+              EXPECT_ZONE=7
+              EXPECT_MIN_DOMAINS=7
+            fi
+
+            if grep -q '^kind: Redpanda$' /tmp/wero-prod-rendered.yaml; then
+              EXPECT_REPLICAS_3=7
+              grep -q '^  name: redpanda$' /tmp/wero-prod-rendered.yaml
+              ! grep -q '^  name: kafka$' /tmp/wero-prod-rendered.yaml
+              grep -q 'redpanda-0.redpanda.wero-poc-prod.svc.cluster.local:9093' /tmp/wero-prod-rendered.yaml
+              [[ "$(grep -c '^[[:space:]]*- name: KAFKA_SECURITY_PROTOCOL$' /tmp/wero-prod-rendered.yaml)" -eq 2 ]]
+              [[ "$(grep -c '^[[:space:]]*value: SASL_SSL$' /tmp/wero-prod-rendered.yaml)" -eq 2 ]]
+              [[ "$(grep -c '^[[:space:]]*value: SCRAM-SHA-512$' /tmp/wero-prod-rendered.yaml)" -eq 2 ]]
+              [[ "$(grep -c '^[[:space:]]*secretName: redpanda-client-ca$' /tmp/wero-prod-rendered.yaml)" -eq 2 ]]
+              grep -q '^[[:space:]]*name: redpanda-payment-producer$' /tmp/wero-prod-rendered.yaml
+              grep -q '^[[:space:]]*name: redpanda-event-audit-consumer$' /tmp/wero-prod-rendered.yaml
+            fi
+
+            if grep -q '^kind: Keycloak$' /tmp/wero-prod-rendered.yaml; then
+              grep -q '^  name: mayabank-keycloak$' /tmp/wero-prod-rendered.yaml
+              grep -q '^  name: mayabank-keycloak-postgresql$' /tmp/wero-prod-rendered.yaml
+              grep -q 'mayabank-keycloak-postgresql-rw' /tmp/wero-prod-rendered.yaml
+              grep -q '^[[:space:]]*instances: 3$' /tmp/wero-prod-rendered.yaml
+              grep -q '^[[:space:]]*serviceName: keycloak$' /tmp/wero-prod-rendered.yaml
+              EXPECT_PDB_MIN_2=7
+              EXPECT_ANTI_AFFINITY=7
+              EXPECT_HOST=10
+              EXPECT_ZONE=9
+              EXPECT_MIN_DOMAINS=10
+            fi
+
+            [[ "$REPLICAS_3" -eq "$EXPECT_REPLICAS_3" ]] || { echo "Expected $EXPECT_REPLICAS_3 replicas=3 declarations in production target, got $REPLICAS_3"; exit 1; }
+            [[ "$PDB_MIN_2" -eq "$EXPECT_PDB_MIN_2" ]] || { echo "Expected $EXPECT_PDB_MIN_2 production PDBs at minAvailable=2, got $PDB_MIN_2"; exit 1; }
+            [[ "$ANTI_AFFINITY" -eq "$EXPECT_ANTI_AFFINITY" ]] || { echo "Expected $EXPECT_ANTI_AFFINITY required pod anti-affinity declarations in production, got $ANTI_AFFINITY"; exit 1; }
+            [[ "$HOST_TOPOLOGY" -eq "$EXPECT_HOST" ]] || { echo "Expected $EXPECT_HOST hostname topology keys in production, got $HOST_TOPOLOGY"; exit 1; }
+            [[ "$ZONE_TOPOLOGY" -eq "$EXPECT_ZONE" ]] || { echo "Expected $EXPECT_ZONE zone topology-spread keys in production, got $ZONE_TOPOLOGY"; exit 1; }
+            [[ "$MIN_DOMAINS_3" -eq "$EXPECT_MIN_DOMAINS" ]] || { echo "Expected $EXPECT_MIN_DOMAINS minDomains=3 constraints in production, got $MIN_DOMAINS_3"; exit 1; }
+            grep -q 'namespace: wero-poc-prod' /tmp/wero-prod-rendered.yaml
+          fi
+
+      - name: Render and verify V7 Redpanda HA scaffold when present
+        run: |
+          if [[ -f gitops/components/redpanda-ha/kustomization.yaml ]]; then
+            /tmp/kustomize build gitops/components/redpanda-ha > /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^apiVersion: cluster.redpanda.com/v1alpha2$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^kind: Redpanda$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^  name: redpanda$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*tag: v26.2.2$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*replicas: 3$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*size: 20Gi$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*nodeAnnotation: topology.kubernetes.io/zone$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*default_topic_replications: 3$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*minimum_topic_replications: 3$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*secretRef: redpanda-superusers$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*sasl_mechanisms:$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*- SCRAM$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*admin_api_require_auth: true$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*tls:$' /tmp/wero-redpanda-ha-rendered.yaml
+
+            TOPIC_COUNT="$(grep -c '^kind: Topic$' /tmp/wero-redpanda-ha-rendered.yaml)"
+            USER_COUNT="$(grep -c '^kind: User$' /tmp/wero-redpanda-ha-rendered.yaml)"
+            SCRAM512_COUNT="$(grep -c '^[[:space:]]*type: scram-sha-512$' /tmp/wero-redpanda-ha-rendered.yaml)"
+            [[ "$TOPIC_COUNT" -eq 1 ]] || { echo "Expected exactly one C3 Topic resource, got $TOPIC_COUNT"; exit 1; }
+            [[ "$USER_COUNT" -eq 2 ]] || { echo "Expected exactly two C3 User resources, got $USER_COUNT"; exit 1; }
+            [[ "$SCRAM512_COUNT" -eq 2 ]] || { echo "Expected both C3 users to use SCRAM-SHA-512, got $SCRAM512_COUNT"; exit 1; }
+
+            grep -q '^  name: payment-events$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*partitions: 3$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*replicationFactor: 3$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*min.insync.replicas: "2"$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^  name: payment-producer$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*name: redpanda-payment-producer$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^  name: event-audit-consumer$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*name: redpanda-event-audit-consumer$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*name: payment-audit-v1$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*- Write$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*- Read$' /tmp/wero-redpanda-ha-rendered.yaml
+            grep -q '^[[:space:]]*- Describe$' /tmp/wero-redpanda-ha-rendered.yaml
+          fi
+
+      - name: Validate V7 production lab scripts
+        run: |
+          if [[ -f tests/production/test-v7-cnpg-failover.sh ]]; then
+            bash -n tests/production/test-v7-cnpg-failover.sh
+          fi
+
+      - name: Verify runtime Secrets are not part of rendered desired state
+        run: |
+          for rendered in /tmp/wero-rendered.yaml /tmp/wero-preprod-rendered.yaml /tmp/wero-prod-rendered.yaml /tmp/wero-redpanda-ha-rendered.yaml; do
+            [[ -f "$rendered" ]] || continue
+            if grep -E '^[[:space:]]*kind:[[:space:]]*Secret[[:space:]]*$' "$rendered"; then
+              echo "ERROR: Secret manifest found in rendered runtime desired state: $rendered"
+              exit 1
+            fi
+          done

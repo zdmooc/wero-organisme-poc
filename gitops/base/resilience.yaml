@@ -1,0 +1,59 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api-gateway
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: api-gateway
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: payment-service
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: payment-service
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: consumer-psp
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: consumer-psp
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: event-audit-service
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: event-audit-service
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mock-wero
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: mock-wero
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mock-sct-inst
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: mock-sct-inst

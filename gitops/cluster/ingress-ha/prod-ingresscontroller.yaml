@@ -1,0 +1,24 @@
+apiVersion: operator.openshift.io/v1
+kind: IngressController
+metadata:
+  name: mayabank-prod-public
+  namespace: openshift-ingress-operator
+  annotations:
+    architecture.mayabanque.io/status: target-not-runtime-validated
+    architecture.mayabanque.io/phase: v7-c5
+spec:
+  # Production frontdoor target. Three router replicas express the desired
+  # router capacity/availability target; real node/zone placement is a runtime
+  # prerequisite and must be verified on the target OpenShift cluster.
+  replicas: 3
+
+  # Dedicated public shard: only Routes carrying this label are admitted.
+  routeSelector:
+    matchLabels:
+      ingress.mayabanque.io/shard: prod-public
+
+  # Provider-neutral by design. The real environment must supply/validate:
+  # - immutable public ingress domain
+  # - approved wildcard/default certificate Secret when required
+  # - endpointPublishingStrategy (LB/HostNetwork/NodePort/etc.)
+  # - nodePlacement based on verified worker/infra labels and tolerations

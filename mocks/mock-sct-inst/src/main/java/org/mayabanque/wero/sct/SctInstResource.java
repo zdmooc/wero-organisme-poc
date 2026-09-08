@@ -1,11 +1,9 @@
 package org.mayabanque.wero.sct;
 
 import io.opentelemetry.api.trace.Span;
+import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import org.jboss.logging.Logger;
 
 @Path("/sct-inst/transfers")
@@ -13,7 +11,8 @@ import org.jboss.logging.Logger;
 @Produces(MediaType.APPLICATION_JSON)
 public class SctInstResource {
     private static final Logger LOG = Logger.getLogger(SctInstResource.class);
-    private static final Map<String, TransferStatus> TRANSFERS = new ConcurrentHashMap<>();
+
+    @Inject SctInstStore store;
 
     @POST
     public TransferResponse transfer(@HeaderParam("X-Correlation-Id") String correlationId, TransferRequest request) {
@@ -21,8 +20,8 @@ public class SctInstResource {
         if (correlationId != null) Span.current().setAttribute("wero.correlation_id", correlationId);
         LOG.infof("correlationId=%s paymentId=%s sct-inst mode=%s", correlationId, request.paymentId(), request.simulateMode());
         if ("FAIL_BEFORE_SETTLEMENT".equalsIgnoreCase(request.simulateMode())) return new TransferResponse(null, "FAILED");
-        TransferStatus stored = TRANSFERS.computeIfAbsent(request.paymentId(),
-                id -> new TransferStatus(id, "SETTLED", "SCT-" + UUID.randomUUID()));
+
+        SctInstStore.StoredTransfer stored = store.settle(request.paymentId());
         if ("TIMEOUT_AFTER_SETTLEMENT".equalsIgnoreCase(request.simulateMode())) {
             try { Thread.sleep(5000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         }
@@ -34,7 +33,10 @@ public class SctInstResource {
                                  @PathParam("paymentId") String paymentId) {
         Span.current().setAttribute("wero.payment_id", paymentId);
         if (correlationId != null) Span.current().setAttribute("wero.correlation_id", correlationId);
-        return TRANSFERS.getOrDefault(paymentId, new TransferStatus(paymentId, "NOT_FOUND", null));
+        LOG.infof("correlationId=%s paymentId=%s sct-inst status lookup", correlationId, paymentId);
+        return store.find(paymentId)
+                .map(stored -> new TransferStatus(stored.paymentId(), stored.status(), stored.settlementId()))
+                .orElseGet(() -> new TransferStatus(paymentId, "NOT_FOUND", null));
     }
 
     public record TransferRequest(String paymentId, long amountCents, String currency, String simulateMode) {}

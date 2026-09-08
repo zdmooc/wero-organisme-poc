@@ -88,6 +88,16 @@ public class GatewayResource {
         return relay(paymentBackend.reconcile(authorization, cid, paymentId), cid);
     }
 
+    @POST @Path("/payments/{paymentId}/recover") @RolesAllowed("payment-reconcile")
+    public Response recover(@HeaderParam("Authorization") String authorization,
+                            @HeaderParam("X-Correlation-Id") String correlationId,
+                            @PathParam("paymentId") String paymentId,
+                            String body) {
+        String cid = observe(correlationId, "payment.recover");
+        Span.current().setAttribute("wero.payment_id", paymentId);
+        return relay(paymentBackend.recover(authorization, cid, paymentId, body), cid);
+    }
+
     @GET @Path("/outbox/{paymentId}") @RolesAllowed("payment-read")
     public Response getOutbox(@HeaderParam("Authorization") String authorization,
                               @HeaderParam("X-Correlation-Id") String correlationId,
