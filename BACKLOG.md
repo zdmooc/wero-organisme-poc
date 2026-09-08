@@ -70,11 +70,12 @@
 - [x] test de drift automatique ajouté
 - [x] CI de rendu Kustomize ajoutée
 - [x] validation runtime CRC V5 (`V4 OK` + `V5 OK`)
-- [ ] promotion par image immutable/digest
+- [x] mécanisme de promotion par image immutable/digest préparé dans `scripts/prepare-v7-image-promotion.sh` ; vrais digests à fournir par le registry réel
 - [x] scaffold overlay `prod` architecture cible ajouté en V7 C1
 - [x] scaffold overlay `preprod` architecture cible ajouté en V7 C1
-- [ ] applications Argo CD preprod/prod lorsque les environnements existent
-- [ ] progressive delivery dans une itération dédiée
+- [x] ApplicationSets provider-neutral preprod/prod + ingress ajoutés ; enregistrement des vrais clusters Argo CD reste infra-dépendant
+- [x] progressive delivery conçue avec Argo Rollouts dans `docs/architecture/25-progressive-delivery-v7.md`
+- [ ] activer/tester Argo Rollouts sur un vrai preprod après installation Operator, métriques SLO et images digest
 
 ## V6 — SPOF / Résilience
 ### Phase A — pod HA sur CRC
@@ -113,6 +114,8 @@
 
 ## V7 — Cible HA production
 
+> **Statut dépôt : design / Git / CI / runbooks terminés dans la limite de ce qui est faisable sans infrastructure réelle.** Les cases restantes ci-dessous requièrent explicitement un vrai OpenShift multi-worker/multi-zone, des services d’infrastructure ou deux sites.
+
 ### C1 — topologie OpenShift multi-node / multi-zone
 - [x] branche `v7-production-ha-architecture` créée depuis la baseline V6 finale
 - [x] overlay `gitops/overlays/preprod` créé dans le namespace cible `wero-poc-preprod`
@@ -125,23 +128,23 @@
 - [x] preprod : `minDomains: 2`, PDB de base `minAvailable: 1`
 - [x] CI Kustomize vérifie les rendus CRC, preprod et prod et l’absence de `Secret` dans le desired state
 - [x] documentation `docs/architecture/13-production-ha-topology-v7-c1.md`
-- [ ] validation runtime multi-worker / multi-zone sur un environnement OpenShift adapté
+- [ ] **INFRA** validation runtime perte worker / zone sur OpenShift multi-worker / multi-zone
 
 ### C2 — PostgreSQL HA
-- [x] architecture de référence CloudNativePG choisie ; politique sync/async laissée à la décision RPO/RTO C6
+- [x] architecture de référence CloudNativePG choisie
 - [x] composant CNPG `mayabank-postgresql` à 3 instances avec anti-affinity worker et secret applicatif externe à Git
 - [x] modèle lab `Deployment postgresql + PVC unique + Service postgresql` supprimé des rendus preprod/prod
 - [x] preprod : cluster CNPG 3 instances avec spread sur 2 zones
 - [x] prod : cluster CNPG 3 instances avec spread sur 3 zones
 - [x] `payment-service`, `event-audit-service` et `mock-sct-inst` pointent vers `mayabank-postgresql-rw` sans modification Java
+- [x] cible C6 de durabilité : réplication synchrone vers 1 standby (`any / 1 / dataDurability=required`)
 - [x] CI Kustomize vérifie le cluster CNPG, l’endpoint RW, l’absence de l’ancien PostgreSQL et l’absence de Secrets runtime
 - [x] lab C2-F1 de failover primaire ajouté dans `tests/production/test-v7-cnpg-failover.sh` et syntaxe validée par CI
 - [x] architecture backup / WAL / PITR définie avec Barman Cloud CNPG-I Plugin dans `docs/architecture/15-postgresql-backup-pitr-v7-c2.md`
-- [ ] sélectionner le provider object storage et créer l’`ObjectStore`, les credentials externes et le `ScheduledBackup`
-- [ ] exécuter C2-F1 sur OpenShift multi-worker et mesurer promotion/service RW + RTO
-- [ ] exécuter C2-F2/C2-F3/C2-F4 : perte worker, perte standby, switchover contrôlé
-- [ ] exécuter C2-F5 restore et C2-F6 PITR dans un cluster de récupération séparé
-- [ ] mesurer la fenêtre de perte éventuelle et mapper les preuves aux objectifs RPO/RTO C6
+- [ ] **INFRA** sélectionner le provider object storage et créer l’`ObjectStore`, credentials externes et `ScheduledBackup`
+- [ ] **INFRA** exécuter C2-F1/F2/F3/F4 : primaire, worker, standby, switchover et mesurer RTO
+- [ ] **INFRA** exécuter C2-F5 restore et C2-F6 PITR dans un cluster de récupération séparé
+- [ ] **INFRA** mesurer le RPO réel et confronter les résultats aux objectifs C6
 
 ### C3 — Kafka/Redpanda HA
 - [x] architecture de référence Redpanda Operator 3 brokers définie dans `docs/architecture/16-redpanda-ha-v7-c3.md`
@@ -154,18 +157,13 @@
 - [x] contrat CA/credentials/bootstrap documenté dans `docs/architecture/17-redpanda-security-clients-v7-c3.md`
 - [x] `payment-service` et `event-audit-service` transmettent les propriétés TLS/SASL à leurs clients Kafka construits manuellement ; CRC conserve `PLAINTEXT` par défaut
 - [x] producer Outbox conserve `acks=all`, idempotence Kafka et clé `paymentId` pour l’ordre par paiement
-- [x] preprod inclut Redpanda HA sécurisé et supprime le `Deployment/Service kafka` du lab
-- [x] prod inclut Redpanda HA sécurisé et supprime le `Deployment/Service kafka` du lab
-- [x] CI vérifie CRC séparément, Redpanda HA, TLS/SASL, topic RF3/minISR2, users/ACL, overlays preprod/prod et absence de `Secret` runtime
-- [x] compilation CI réussie pour les deux composants Java modifiés : `services/payment-service` et `services/event-audit-service`
-- [ ] provisionner réellement `redpanda-superusers`, les deux secrets SCRAM/JAAS et `redpanda-client-ca` sur l’environnement cible
-- [ ] vérifier en runtime `payment-events` : 3 partitions, RF=3, ISR sain et placement des replicas
-- [ ] valider en runtime authentification, refus de mauvais credentials et ACL least-privilege
-- [ ] valider latence/disponibilité de `acks=all` contre les objectifs C6
-- [ ] ajouter les labs C3-F1/F2/F3/F4 : perte broker, perte worker, perte zone et decommission
-- [ ] exécuter les pannes et mesurer leaderless/under-replicated partitions, RTO, Outbox pending et consumer lag
-- [ ] confirmer la continuité Outbox / audit et l’absence de duplication logique sous défaillance broker
-- [ ] mapper la stratégie DR Redpanda à C7
+- [x] preprod/prod incluent Redpanda HA sécurisé et suppriment le `Deployment/Service kafka` du lab
+- [x] CI vérifie Redpanda HA, TLS/SASL, topic RF3/minISR2, users/ACL, overlays et absence de `Secret` runtime
+- [x] stratégie DR Redpanda mappée à C7 : Shadowing Enterprise si disponible, sinon recovery avec RTO/RPO explicites
+- [ ] **INFRA** provisionner `redpanda-superusers`, secrets SCRAM/JAAS et `redpanda-client-ca`
+- [ ] **INFRA** vérifier en runtime partitions/RF/ISR, auth/ACL et disponibilité `acks=all`
+- [ ] **INFRA** exécuter perte broker/worker/zone/decommission, mesurer leaderless/URP/RTO/outbox/consumer lag
+- [ ] **INFRA** confirmer continuité Outbox/audit et absence de duplication logique sous panne broker
 
 ### C4 — Keycloak HA
 - [x] architecture Keycloak Operator `v2beta1` + production mode définie dans `docs/architecture/18-keycloak-ha-v7-c4.md`
@@ -175,51 +173,66 @@
 - [x] prod : 3 instances Keycloak, anti-affinity worker, spread 3 domaines workers/zones, PDB `minAvailable=2`
 - [x] base IAM CloudNativePG dédiée `mayabank-keycloak-postgresql` à 3 instances, endpoint RW role-aware et cible synchrone vers 1 standby
 - [x] Secret DB `keycloak-db` référencé hors Git ; aucun credential runtime ajouté au desired state
-- [x] contrat OIDC interne `http://keycloak:8080` conservé via `spec.http.serviceName/serviceHttpPort`, donc aucun changement Java C4
+- [x] contrat OIDC interne `http://keycloak:8080` conservé via `spec.http.serviceName/serviceHttpPort`
 - [x] anciens `Deployment/Service/Route keycloak` du lab retirés des rendus preprod/prod ; CRC reste inchangé
-- [x] production mode / cache distribué Infinispan + découverte `jdbc-ping` documentés comme cible, sans prétendre à une preuve runtime
+- [x] production mode / cache distribué Infinispan + découverte `jdbc-ping` documentés comme cible
 - [x] bootstrap realm one-shot `gitops/bootstrap/keycloak/mayabanque-realm-import.yaml` ajouté hors overlays continus, sans mot de passe dans Git
-- [x] CI dédiée C4 + gate global contrôlent composant, preprod/prod, scheduling, PDB, service interne, DB IAM et absence de `Secret`
-- [ ] provisionner réellement Keycloak Operator/CRDs, `keycloak-db` et bootstrap admin externe sur l’environnement cible
-- [x] C5 frontdoor Git/render défini : Routes HTTPS, re-encrypt Keycloak et service-ca ; runtime DNS/LB/certificats/NetworkPolicy reste à provisionner
-- [ ] exécuter C4-F1/F2/F3/F4/F5/F6 sur OpenShift multi-worker/multi-zone
-- [ ] vérifier sous panne login/session/refresh-token, OIDC discovery, JWK et cohérence des clés de signature
-- [ ] mesurer IAM RTO/RPO observés et mapper les critères d’acceptation à C6
+- [x] CI dédiée C4 + gate global contrôlent composant, scheduling, PDB, service interne, DB IAM et absence de `Secret`
+- [x] frontdoor C5 Git/render défini et IAM mappé aux objectifs C6
+- [ ] **INFRA** provisionner Keycloak Operator/CRDs, `keycloak-db` et bootstrap admin externe
+- [ ] **INFRA** exécuter C4-F1..F6 : perte pod/worker/zone/DB IAM/rolling update/bootstrap frais
+- [ ] **INFRA** vérifier login/session/refresh-token/discovery/JWK/signing keys et mesurer IAM RTO/RPO
 
 ### C5 — Ingress / LB / DNS / TLS HA
 - [x] architecture provider-neutral documentée dans `docs/architecture/20-ingress-lb-dns-tls-ha-v7-c5.md`
 - [x] implémentation C5 documentée dans `docs/architecture/21-ingress-lb-dns-tls-ha-v7-c5-implementation.md`
 - [x] IngressController public preprod : 2 routers, shard `preprod-public`
 - [x] IngressController public prod : 3 routers, shard `prod-public`
-- [x] `domain`, `defaultCertificate`, `endpointPublishingStrategy` et `nodePlacement` laissés explicitement à l’environnement réel au lieu d’être inventés
+- [x] `domain`, `defaultCertificate`, `endpointPublishingStrategy` et `nodePlacement` laissés à l’environnement réel
 - [x] composant `gitops/components/frontdoor-ha` limité à `api-gateway-public` et `keycloak-public`
-- [x] Routes lab/admin `api-gateway`, `jaeger`, `prometheus`, `grafana` retirées des cibles C5 ; observabilité non publique par défaut
-- [x] API Gateway public en TLS `edge` avec redirection HTTP -> HTTPS
-- [x] Keycloak public en TLS `reencrypt` vers le port HTTPS du Service
-- [x] certificat backend Keycloak provisionné par contrat OpenShift `service-ca` (`keycloak-service-tls`) sans `Secret` commité
-- [x] contrat interne C4 `http://keycloak:8080` conservé ; aucun changement Java ni rebuild applicatif spécifique C5
-- [x] overlays C5 dédiés `gitops/overlays/preprod-c5` et `gitops/overlays/prod-c5` superposés aux cibles C1-C4
-- [x] CI dédiée `.github/workflows/ci-v7-frontdoor.yml` vérifie ingress shards, Routes, TLS, service-ca, absence de hostname fictif et absence de `Secret`
-- [x] runbook C5-F1 `tests/production/test-v7-ingress-failover.sh` ajouté, dry-run par défaut, suppression d’un seul router pod sous opt-in explicite
-- [ ] choisir/provisionner sur le vrai environnement le domaine ingress, les hostnames API/Keycloak, la stratégie de publication/LB, les certificats publics et le node placement
-- [ ] finaliser la NetworkPolicy Keycloak avec les vrais labels du chemin ingress et l’accès admin observabilité
-- [ ] exécuter C5-F1 sur un environnement multi-router et mesurer le RTO public API/OIDC
-- [ ] exécuter C5-F2/F3/F4/F5/F6 : perte worker, perte zone, cible LB, rotation certificat et DNS/failover si applicable
-- [ ] vérifier issuer/OIDC discovery/token/JWK Keycloak via le vrai hostname HTTPS et mesurer les fenêtres d’erreur
-- [ ] mapper les preuves C5 aux objectifs RTO/RPO C6
+- [x] Routes lab/admin observabilité retirées des cibles C5
+- [x] API Gateway TLS `edge` + redirect ; Keycloak TLS `reencrypt` vers 8443
+- [x] certificat backend Keycloak par contrat OpenShift `service-ca` sans `Secret` commité
+- [x] overlays C5 `preprod-c5` et `prod-c5`
+- [x] NetworkPolicies provider-neutral frontdoor API Gateway/Keycloak ajoutées ; ingress namespace, OIDC interne et metrics internes explicités
+- [x] CI dédiée `.github/workflows/ci-v7-frontdoor.yml`
+- [x] runbook C5-F1 `tests/production/test-v7-ingress-failover.sh` dry-run par défaut
+- [x] scénarios C5 mappés aux objectifs C6
+- [ ] **INFRA** provisionner domaine, hostnames, publication/LB, certificats publics et node placement
+- [ ] **INFRA** confirmer les labels/chemins réseau réels et le modèle d’accès admin observabilité ; adapter les NetworkPolicies si nécessaire
+- [ ] **INFRA** exécuter C5-F1..F6 : router, worker, zone, LB, rotation certificat, DNS/failover
+- [ ] **INFRA** vérifier issuer/discovery/token/JWK via le vrai hostname HTTPS et mesurer les fenêtres d’erreur
 
 ### C6 — RTO/RPO métier
-- [ ] définir RTO/RPO par capacité de paiement
-- [ ] mapper les objectifs aux dépendances techniques
-- [ ] définir SLI/SLO et critères de validation
+- [x] objectifs RTO/RPO candidats par capacité documentés dans `docs/architecture/22-rto-rpo-sli-slo-v7-c6.md`
+- [x] dépendances techniques C1-C7 mappées aux objectifs
+- [x] SLI/SLO candidats et critères d’acceptation définis
+- [x] cible PostgreSQL paiement synchrone vers 1 standby alignée avec le RPO=0 intra-site candidat
+- [x] évaluateur non destructif `tests/production/test-v7-rto-rpo-evidence.sh` ajouté
+- [x] CI `.github/workflows/ci-v7-continuity.yml` valide les contrats C6/C7
+- [ ] **MÉTIER/INFRA** faire valider les objectifs candidats par les responsables métier/SRE ; ils ne sont pas des SLA contractuels
+- [ ] **INFRA** alimenter l’évaluateur avec les mesures réelles C1-C5/C7 et produire les preuves finales
 
 ### C7 — multi-site / PRA / runbooks
-- [ ] stratégie multi-site
-- [ ] réplication et bascule
-- [ ] runbooks de reprise
-- [ ] exercices de perte de site
-- [ ] preuves de reprise et critères de retour au nominal
+- [x] stratégie deux sites actif / secours chaud contrôlé définie dans `docs/architecture/23-multisite-pra-v7-c7.md`
+- [x] règle anti split-brain : un seul site accepte les écritures paiement
+- [x] architecture DR CNPG paiement/IAM, Redpanda Shadowing ou recovery, Keycloak standby et frontdoor définie
+- [x] ordre de bascule/fencing/réconciliation/failback documenté
+- [x] runbook `docs/runbooks/v7-site-failover.md` ajouté
+- [x] check non destructif `tests/production/test-v7-dr-readiness.sh` ajouté
+- [x] objectifs PRA candidats RTO <=30 min / RPO <=5 min mappés à C6 sans les présenter comme preuves
+- [ ] **INFRA** provisionner le second cluster/site, réseau inter-site, object storage et mécanisme Redpanda retenu
+- [ ] **INFRA** exécuter un exercice perte de site complet avec fencing, promotion, frontdoor et réconciliation
+- [ ] **INFRA** conserver les preuves RTO/RPO, absence de double settlement et réaliser un exercice de failback
+
+### Clôture V7 sans infrastructure
+- [x] ApplicationSets preprod/prod/ingress provider-neutral dans `gitops/argocd/applicationset-v7-environments.yaml`
+- [x] AppProject étendu aux namespaces preprod/prod/ingress sans URL/credential de cluster en Git
+- [x] mécanisme de promotion immutable/digest documenté et scripté dans `docs/architecture/24-gitops-promotion-v7.md`
+- [x] design progressive delivery Argo Rollouts dans `docs/architecture/25-progressive-delivery-v7.md`
+- [x] CI dédiée `V7 GitOps production-readiness contracts`
+- [x] tous les travaux réalisables honnêtement sans infrastructure réelle sont consignés ; les tâches restantes sont marquées **INFRA** ou **MÉTIER/INFRA**
 
 ## V8 — Sandbox externe
 - [ ] connecter un adaptateur externe de test si les prérequis sont disponibles
-- [ ] conserver le mock local comme mode autonome
+- [x] conserver le mock local comme mode autonome
