@@ -36,3 +36,12 @@ spec:
     enablePodAntiAffinity: true
     topologyKey: kubernetes.io/hostname
     podAntiAffinityType: required
+
+  # C6 durability target: a successful PostgreSQL commit must reach at least one
+  # synchronous standby. This supports an intra-site RPO=0 target for covered
+  # failures, but only runtime fault tests can prove the achieved RPO/RTO.
+  postgresql:
+    synchronous:
+      method: any
+      number: 1
+      dataDurability: required
