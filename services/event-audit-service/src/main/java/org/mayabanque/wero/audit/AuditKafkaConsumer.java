@@ -16,9 +16,12 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import org.apache.kafka.clients.consumer.*;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
@@ -59,10 +62,34 @@ public class AuditKafkaConsumer {
         try {
             ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(250));
             if (records.isEmpty()) return;
-            for (ConsumerRecord<String, String> record : records) consume(record);
-            consumer.commitSync();
+
+            Map<TopicPartition, Long> batchStartOffsets = new HashMap<>();
+            for (ConsumerRecord<String, String> record : records) {
+                TopicPartition partition = new TopicPartition(record.topic(), record.partition());
+                batchStartOffsets.merge(partition, record.offset(), Math::min);
+            }
+
+            try {
+                for (ConsumerRecord<String, String> record : records) consume(record);
+                consumer.commitSync();
+            } catch (Exception e) {
+                rewind(batchStartOffsets);
+                LOG.warnf("Kafka audit batch failed; rewound %d partition(s) for retry: %s",
+                        batchStartOffsets.size(), e.getMessage());
+            }
         } catch (Exception e) {
             LOG.warnf("Kafka audit poll failed: %s", e.getMessage());
+        }
+    }
+
+    private void rewind(Map<TopicPartition, Long> batchStartOffsets) {
+        for (Map.Entry<TopicPartition, Long> entry : batchStartOffsets.entrySet()) {
+            try {
+                consumer.seek(entry.getKey(), entry.getValue());
+            } catch (Exception seekError) {
+                LOG.warnf("Kafka audit rewind failed for %s at offset %d: %s",
+                        entry.getKey(), entry.getValue(), seekError.getMessage());
+            }
         }
     }
 

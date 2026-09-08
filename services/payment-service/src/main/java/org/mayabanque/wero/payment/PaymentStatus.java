@@ -6,5 +6,6 @@ public enum PaymentStatus {
     PENDING,
     SETTLED,
     FAILED,
-    UNKNOWN
+    UNKNOWN,
+    RECOVERY_PENDING
 }

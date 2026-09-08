@@ -9,7 +9,7 @@ spec:
   project: wero-poc
   source:
     repoURL: https://github.com/zdmooc/wero-organisme-poc.git
-    targetRevision: v5-gitops-argocd
+    targetRevision: v6-spof-chaos-ha-resilience
     path: gitops/overlays/crc
   destination:
     server: https://kubernetes.default.svc
