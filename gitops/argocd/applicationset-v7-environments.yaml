@@ -1,0 +1,146 @@
+# V7 provider-neutral ApplicationSet scaffolds.
+# Prerequisite: register target clusters in Argo CD and label their cluster
+# Secrets with mayabanque.io/environment=preprod or prod. No server URL or
+# credential is committed here.
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: wero-poc-preprod
+  namespace: openshift-gitops
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - clusters:
+        selector:
+          matchLabels:
+            mayabanque.io/environment: preprod
+  template:
+    metadata:
+      name: 'wero-poc-preprod-{{.nameNormalized}}'
+      namespace: openshift-gitops
+    spec:
+      project: wero-poc
+      source:
+        repoURL: https://github.com/zdmooc/wero-organisme-poc.git
+        targetRevision: v7-production-ha-architecture
+        path: gitops/overlays/preprod-c5
+      destination:
+        server: '{{.server}}'
+        namespace: wero-poc-preprod
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+          allowEmpty: false
+        syncOptions:
+          - CreateNamespace=true
+          - PrunePropagationPolicy=foreground
+          - PruneLast=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: wero-poc-prod
+  namespace: openshift-gitops
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - clusters:
+        selector:
+          matchLabels:
+            mayabanque.io/environment: prod
+  template:
+    metadata:
+      name: 'wero-poc-prod-{{.nameNormalized}}'
+      namespace: openshift-gitops
+    spec:
+      project: wero-poc
+      source:
+        repoURL: https://github.com/zdmooc/wero-organisme-poc.git
+        targetRevision: v7-production-ha-architecture
+        path: gitops/overlays/prod-c5
+      destination:
+        server: '{{.server}}'
+        namespace: wero-poc-prod
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+          allowEmpty: false
+        syncOptions:
+          - CreateNamespace=true
+          - PrunePropagationPolicy=foreground
+          - PruneLast=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: wero-ingress-preprod
+  namespace: openshift-gitops
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - clusters:
+        selector:
+          matchLabels:
+            mayabanque.io/environment: preprod
+  template:
+    metadata:
+      name: 'wero-ingress-preprod-{{.nameNormalized}}'
+      namespace: openshift-gitops
+    spec:
+      project: wero-poc
+      source:
+        repoURL: https://github.com/zdmooc/wero-organisme-poc.git
+        targetRevision: v7-production-ha-architecture
+        path: gitops/cluster/ingress-ha
+        directory:
+          recurse: false
+          include: preprod-ingresscontroller.yaml
+      destination:
+        server: '{{.server}}'
+        namespace: openshift-ingress-operator
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+          allowEmpty: false
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: wero-ingress-prod
+  namespace: openshift-gitops
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - clusters:
+        selector:
+          matchLabels:
+            mayabanque.io/environment: prod
+  template:
+    metadata:
+      name: 'wero-ingress-prod-{{.nameNormalized}}'
+      namespace: openshift-gitops
+    spec:
+      project: wero-poc
+      source:
+        repoURL: https://github.com/zdmooc/wero-organisme-poc.git
+        targetRevision: v7-production-ha-architecture
+        path: gitops/cluster/ingress-ha
+        directory:
+          recurse: false
+          include: prod-ingresscontroller.yaml
+      destination:
+        server: '{{.server}}'
+        namespace: openshift-ingress-operator
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+          allowEmpty: false

@@ -1,0 +1,79 @@
+apiVersion: cluster.redpanda.com/v1alpha2
+kind: Topic
+metadata:
+  name: payment-events
+  annotations:
+    architecture.mayabanque.io/status: target-not-crc-validated
+spec:
+  cluster:
+    clusterRef:
+      name: redpanda
+  partitions: 3
+  replicationFactor: 3
+  additionalConfig:
+    min.insync.replicas: "2"
+---
+apiVersion: cluster.redpanda.com/v1alpha2
+kind: User
+metadata:
+  name: payment-producer
+  annotations:
+    architecture.mayabanque.io/status: target-not-crc-validated
+spec:
+  cluster:
+    clusterRef:
+      name: redpanda
+  authentication:
+    type: scram-sha-512
+    password:
+      valueFrom:
+        secretKeyRef:
+          name: redpanda-payment-producer
+          key: password
+    syncCredentials: true
+  authorization:
+    acls:
+      - type: allow
+        resource:
+          type: topic
+          name: payment-events
+          patternType: literal
+        operations:
+          - Write
+          - Describe
+---
+apiVersion: cluster.redpanda.com/v1alpha2
+kind: User
+metadata:
+  name: event-audit-consumer
+  annotations:
+    architecture.mayabanque.io/status: target-not-crc-validated
+spec:
+  cluster:
+    clusterRef:
+      name: redpanda
+  authentication:
+    type: scram-sha-512
+    password:
+      valueFrom:
+        secretKeyRef:
+          name: redpanda-event-audit-consumer
+          key: password
+    syncCredentials: true
+  authorization:
+    acls:
+      - type: allow
+        resource:
+          type: topic
+          name: payment-events
+          patternType: literal
+        operations:
+          - Read
+          - Describe
+      - type: allow
+        resource:
+          type: group
+          name: payment-audit-v1
+          patternType: literal
+        operations:
+          - Read

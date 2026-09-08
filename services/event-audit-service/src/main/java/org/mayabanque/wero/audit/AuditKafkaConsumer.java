@@ -19,9 +19,13 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
+import org.apache.kafka.clients.CommonClientConfigs;
 import org.apache.kafka.clients.consumer.*;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.config.SaslConfigs;
+import org.apache.kafka.common.config.SslConfigs;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
@@ -32,6 +36,11 @@ public class AuditKafkaConsumer {
     private static final Logger LOG = Logger.getLogger(AuditKafkaConsumer.class);
 
     @ConfigProperty(name = "kafka.bootstrap.servers") String bootstrapServers;
+    @ConfigProperty(name = "kafka.security.protocol", defaultValue = "PLAINTEXT") String securityProtocol;
+    @ConfigProperty(name = "kafka.sasl.mechanism") Optional<String> saslMechanism;
+    @ConfigProperty(name = "kafka.sasl.jaas.config") Optional<String> saslJaasConfig;
+    @ConfigProperty(name = "kafka.ssl.truststore.type") Optional<String> sslTruststoreType;
+    @ConfigProperty(name = "kafka.ssl.truststore.location") Optional<String> sslTruststoreLocation;
     @ConfigProperty(name = "wero.events.topic", defaultValue = "payment-events") String topic;
     @ConfigProperty(name = "wero.audit.group-id", defaultValue = "payment-audit-v1") String groupId;
     @Inject AuditStore store;
@@ -48,8 +57,17 @@ public class AuditKafkaConsumer {
         props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
         props.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, "100");
+        applyKafkaSecurity(props);
         consumer = new KafkaConsumer<>(props);
         consumer.subscribe(List.of(topic));
+    }
+
+    private void applyKafkaSecurity(Properties props) {
+        props.put(CommonClientConfigs.SECURITY_PROTOCOL_CONFIG, securityProtocol);
+        saslMechanism.filter(v -> !v.isBlank()).ifPresent(v -> props.put(SaslConfigs.SASL_MECHANISM, v));
+        saslJaasConfig.filter(v -> !v.isBlank()).ifPresent(v -> props.put(SaslConfigs.SASL_JAAS_CONFIG, v));
+        sslTruststoreType.filter(v -> !v.isBlank()).ifPresent(v -> props.put(SslConfigs.SSL_TRUSTSTORE_TYPE_CONFIG, v));
+        sslTruststoreLocation.filter(v -> !v.isBlank()).ifPresent(v -> props.put(SslConfigs.SSL_TRUSTSTORE_LOCATION_CONFIG, v));
     }
 
     @PreDestroy
