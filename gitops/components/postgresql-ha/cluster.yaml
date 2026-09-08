@@ -1,0 +1,47 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: mayabank-postgresql
+  annotations:
+    architecture.mayabanque.io/status: target-not-crc-validated
+    architecture.mayabanque.io/capacity: placeholder-requires-sizing
+spec:
+  # C2 reference topology: one primary plus two standby candidates.
+  # The surrounding OpenShift environment must provide matching worker,
+  # failure-domain and storage topology before runtime HA can be claimed.
+  instances: 3
+
+  # Keep superuser login disabled by default. Application ownership is bootstrapped
+  # from a kubernetes.io/basic-auth Secret created outside Git.
+  enableSuperuserAccess: false
+
+  bootstrap:
+    initdb:
+      database: wero
+      owner: mayabanque
+      dataChecksums: true
+      secret:
+        name: postgresql-app
+
+  # C2-B is a renderable architecture scaffold, not production sizing.
+  # Each CNPG instance receives an independent PVC; the StorageClass is selected
+  # by the target cluster default until an environment-specific storage decision
+  # is recorded.
+  storage:
+    size: 10Gi
+
+  # Enforce one instance per worker. Zone-level constraints are patched by the
+  # preprod/prod overlays because their required domain counts differ.
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+    podAntiAffinityType: required
+
+  # C6 durability target: a successful PostgreSQL commit must reach at least one
+  # synchronous standby. This supports an intra-site RPO=0 target for covered
+  # failures, but only runtime fault tests can prove the achieved RPO/RTO.
+  postgresql:
+    synchronous:
+      method: any
+      number: 1
+      dataDurability: required

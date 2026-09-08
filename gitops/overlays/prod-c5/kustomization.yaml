@@ -1,0 +1,113 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# C5 frontdoor layer over the C1-C4 production target. This target is
+# render-validatable but still requires real DNS/LB/certificate inputs before
+# runtime deployment.
+namespace: wero-poc-prod
+
+resources:
+  - ../prod
+  - ../../components/frontdoor-ha
+
+commonAnnotations:
+  gitops.mayabanque.io/frontdoor-phase: v7-c5
+
+patches:
+  # The CRC/base convenience Routes are not part of the public production
+  # frontdoor. Only API Gateway and Keycloak are exposed by frontdoor-ha.
+  - target:
+      group: route.openshift.io
+      version: v1
+      kind: Route
+      name: api-gateway
+    patch: |-
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: api-gateway
+      $patch: delete
+
+  - target:
+      group: route.openshift.io
+      version: v1
+      kind: Route
+      name: jaeger
+    patch: |-
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: jaeger
+      $patch: delete
+
+  - target:
+      group: route.openshift.io
+      version: v1
+      kind: Route
+      name: prometheus
+    patch: |-
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: prometheus
+      $patch: delete
+
+  - target:
+      group: route.openshift.io
+      version: v1
+      kind: Route
+      name: grafana
+    patch: |-
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: grafana
+      $patch: delete
+
+  # Bind only the C5 public Routes to the production router shard.
+  - target:
+      group: route.openshift.io
+      version: v1
+      kind: Route
+      name: api-gateway-public
+    patch: |-
+      - op: replace
+        path: /metadata/labels/ingress.mayabanque.io~1shard
+        value: prod-public
+
+  - target:
+      group: route.openshift.io
+      version: v1
+      kind: Route
+      name: keycloak-public
+    patch: |-
+      - op: replace
+        path: /metadata/labels/ingress.mayabanque.io~1shard
+        value: prod-public
+
+  # C5 adds the router-to-Keycloak HTTPS hop. OpenShift service-ca creates
+  # keycloak-service-tls at runtime. Secret contents remain outside Git. HTTP
+  # 8080 remains enabled for the existing internal OIDC compatibility contract.
+  - target:
+      group: k8s.keycloak.org
+      version: v2beta1
+      kind: Keycloak
+      name: mayabank-keycloak
+    patch: |-
+      - op: add
+        path: /spec/http/annotations
+        value:
+          service.beta.openshift.io/serving-cert-secret-name: keycloak-service-tls
+      - op: add
+        path: /spec/http/tlsSecret
+        value: keycloak-service-tls
+      - op: add
+        path: /spec/http/httpsPort
+        value: 8443
+      - op: add
+        path: /spec/http/serviceHttpsPort
+        value: 8443
+      - op: add
+        path: /spec/proxy
+        value:
+          headers: xforwarded

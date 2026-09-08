@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# V7 C3 reusable Redpanda Operator HA scaffold.
+# Not included in CRC/preprod/prod until client TLS/SASL/bootstrap migration is
+# designed and validated. Rendering this component is configuration evidence
+# only; the Redpanda Operator CRDs, cert-manager and runtime Secrets are
+# environment prerequisites.
+resources:
+  - redpanda.yaml
+  - security.yaml

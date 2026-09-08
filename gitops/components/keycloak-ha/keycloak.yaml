@@ -1,0 +1,91 @@
+apiVersion: k8s.keycloak.org/v2beta1
+kind: Keycloak
+metadata:
+  name: mayabank-keycloak
+  annotations:
+    architecture.mayabanque.io/status: target-not-runtime-validated
+    architecture.mayabanque.io/requires-c5-frontdoor: "true"
+    architecture.mayabanque.io/capacity: placeholder-requires-sizing
+spec:
+  # Preprod baseline; production patches this to 3 instances.
+  instances: 2
+
+  db:
+    vendor: postgres
+    host: mayabank-keycloak-postgresql-rw
+    port: 5432
+    database: keycloak
+    usernameSecret:
+      name: keycloak-db
+      key: username
+    passwordSecret:
+      name: keycloak-db
+      key: password
+
+  # Preserve the existing in-cluster contract used by the Quarkus resource
+  # servers: http://keycloak:8080. C5 owns the public hostname, external TLS
+  # termination and Route/Ingress. HTTP here is therefore an internal service
+  # compatibility boundary, not a public clear-text exposure decision.
+  http:
+    httpEnabled: true
+    httpPort: 8080
+    serviceHttpPort: 8080
+    serviceName: keycloak
+
+  # C5 owns the public hostname, TLS termination and ingress/Route contract.
+  # Keep operator-managed ingress disabled here rather than inventing DNS/certs.
+  ingress:
+    enabled: false
+
+  # Operator-supported scheduling only; do not use unsupported.podTemplate.
+  scheduling:
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app.kubernetes.io/instance: mayabank-keycloak
+                app.kubernetes.io/component: server
+            topologyKey: kubernetes.io/hostname
+    topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/instance: mayabank-keycloak
+            app.kubernetes.io/component: server
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/instance: mayabank-keycloak
+            app.kubernetes.io/component: server
+
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+  additionalOptions:
+    - name: metrics-enabled
+      value: "true"
+    - name: log-console-output
+      value: json
+
+  update:
+    strategy: Auto
+
+  readinessProbe:
+    periodSeconds: 10
+    failureThreshold: 6
+  livenessProbe:
+    periodSeconds: 15
+    failureThreshold: 3
+  startupProbe:
+    periodSeconds: 10
+    failureThreshold: 36

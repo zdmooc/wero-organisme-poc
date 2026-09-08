@@ -1,0 +1,59 @@
+name: V7 C6-C7 continuity contracts
+
+on:
+  push:
+    branches:
+      - v7-production-ha-architecture
+    paths:
+      - 'docs/architecture/22-rto-rpo-sli-slo-v7-c6.md'
+      - 'docs/architecture/23-multisite-pra-v7-c7.md'
+      - 'docs/runbooks/v7-site-failover.md'
+      - 'tests/production/test-v7-rto-rpo-evidence.sh'
+      - 'tests/production/test-v7-dr-readiness.sh'
+      - 'gitops/components/postgresql-ha/cluster.yaml'
+      - '.github/workflows/ci-v7-continuity.yml'
+  pull_request:
+    paths:
+      - 'docs/architecture/22-rto-rpo-sli-slo-v7-c6.md'
+      - 'docs/architecture/23-multisite-pra-v7-c7.md'
+      - 'docs/runbooks/v7-site-failover.md'
+      - 'tests/production/test-v7-rto-rpo-evidence.sh'
+      - 'tests/production/test-v7-dr-readiness.sh'
+      - 'gitops/components/postgresql-ha/cluster.yaml'
+      - '.github/workflows/ci-v7-continuity.yml'
+
+jobs:
+  continuity-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate shell syntax
+        run: |
+          bash -n tests/production/test-v7-rto-rpo-evidence.sh
+          bash -n tests/production/test-v7-dr-readiness.sh
+
+      - name: Verify C6 synchronous payment DB target
+        run: |
+          grep -q '^  postgresql:' gitops/components/postgresql-ha/cluster.yaml
+          grep -q '^    synchronous:' gitops/components/postgresql-ha/cluster.yaml
+          grep -q '^      number: 1$' gitops/components/postgresql-ha/cluster.yaml
+          grep -q '^      dataDurability: required$' gitops/components/postgresql-ha/cluster.yaml
+
+      - name: Verify evidence boundaries
+        run: |
+          grep -q 'pas des SLA contractuels' docs/architecture/22-rto-rpo-sli-slo-v7-c6.md
+          grep -q 'actif / secours chaud contrôlé' docs/architecture/23-multisite-pra-v7-c7.md
+          grep -q 'STOP.*double-writer' docs/runbooks/v7-site-failover.md
+
+      - name: Verify no Secret manifest is introduced
+        run: |
+          if grep -R -n '^kind: Secret$' \
+            docs/architecture/22-rto-rpo-sli-slo-v7-c6.md \
+            docs/architecture/23-multisite-pra-v7-c7.md \
+            docs/runbooks/v7-site-failover.md \
+            tests/production/test-v7-rto-rpo-evidence.sh \
+            tests/production/test-v7-dr-readiness.sh; then
+            echo 'ERROR: continuity design must not commit runtime Secret manifests'
+            exit 1
+          fi
